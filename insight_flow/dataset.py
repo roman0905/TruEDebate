@@ -30,7 +30,7 @@ class DebateGraphDataset(TorchDataset):
         """
         Args:
             data_dir: 存储辩论 JSON 文件的目录路径
-            lang: 语言选择 ("en" 或 "cn")，决定 BERT Tokenizer
+            lang: 语言选择 ("en" 或 "zh")，决定 BERT Tokenizer
         """
         self.data_dir = Path(data_dir)
         self.lang = lang
@@ -42,9 +42,22 @@ class DebateGraphDataset(TorchDataset):
 
         logger.info(f"加载数据集: {len(self.file_paths)} 个样本 (lang={lang})")
 
-        # 初始化 BERT Tokenizer
+        # 初始化 BERT Tokenizer (优先使用本地模型目录)
         bert_name = config.BERT_MODELS.get(lang, config.BERT_MODELS["en"])
-        self.tokenizer = AutoTokenizer.from_pretrained(bert_name)
+        tokenizer_path = self._resolve_tokenizer_path(bert_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+
+    @staticmethod
+    def _resolve_tokenizer_path(bert_name: str) -> str:
+        """解析 Tokenizer 路径: 优先使用本地 models/ 目录。"""
+        dir_name = bert_name.split("/")[-1]
+        local_path = config.BERT_LOCAL_DIR / dir_name
+        if local_path.exists() and (local_path / "tokenizer_config.json").exists():
+            return str(local_path)
+        full_local = config.BERT_LOCAL_DIR / bert_name
+        if full_local.exists() and (full_local / "tokenizer_config.json").exists():
+            return str(full_local)
+        return bert_name
 
     def __len__(self) -> int:
         return len(self.file_paths)
@@ -71,6 +84,11 @@ class DebateGraphDataset(TorchDataset):
         edge_index = record["edge_index"]
         label = record["label"]
         news_text = record["news_text"]
+
+        # 标签标准化: 将字符串标签映射为整数
+        if isinstance(label, str):
+            label = config.LABEL_MAP.get(label, label)
+        label = int(label)
 
         # 2. Tokenize 每个节点文本
         node_texts = [n["text"] for n in nodes]

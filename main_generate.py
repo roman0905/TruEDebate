@@ -5,7 +5,7 @@ TruEDebate (TED) — 阶段 1: 离线辩论生成
 
 用法:
     python main_generate.py --dataset en --split train --max_workers 4
-    python main_generate.py --dataset cn --split val --max_workers 2 --max_samples 10
+    python main_generate.py --dataset zh --split val --max_workers 2 --max_samples 10
 """
 
 import argparse
@@ -39,12 +39,12 @@ def load_dataset(dataset: str, split: str) -> list[dict]:
     """
     加载原始新闻数据集。
 
-    支持的文件格式：
-    - JSONL: 每行一个 JSON 对象 {"text": "...", "label": 0/1}
-    - JSON:  一个 JSON 数组 [{"text": "...", "label": 0/1}, ...]
+    实际数据格式:
+    - 路径: data/{en,zh}/{train,val,test}.json
+    - 字段: {"content": "...", "label": 0/1 或 "real"/"fake", ...}
 
     Args:
-        dataset: "en" 或 "cn"
+        dataset: "en" 或 "zh"
         split: "train", "val", 或 "test"
 
     Returns:
@@ -52,19 +52,16 @@ def load_dataset(dataset: str, split: str) -> list[dict]:
     """
     data_dir = config.DATA_DIR
 
-    # 尝试多种可能的文件名
-    possible_names = [
-        f"arg_{dataset}_{split}.jsonl",
-        f"arg_{dataset}_{split}.json",
-        f"{dataset}_{split}.jsonl",
-        f"{dataset}_{split}.json",
-        f"{split}.jsonl",
-        f"{split}.json",
+    # 数据集实际存储在子目录中: data/en/train.json, data/zh/val.json 等
+    possible_paths = [
+        data_dir / dataset / f"{split}.json",
+        data_dir / dataset / f"{split}.jsonl",
+        data_dir / f"{dataset}_{split}.json",
+        data_dir / f"{dataset}_{split}.jsonl",
     ]
 
     file_path = None
-    for name in possible_names:
-        candidate = data_dir / name
+    for candidate in possible_paths:
         if candidate.exists():
             file_path = candidate
             break
@@ -72,8 +69,8 @@ def load_dataset(dataset: str, split: str) -> list[dict]:
     if file_path is None:
         raise FileNotFoundError(
             f"在 {data_dir} 中找不到数据集文件。\n"
-            f"尝试过的文件名: {possible_names}\n"
-            f"请确保数据文件存在于 data/ 目录下。"
+            f"尝试过的路径: {[str(p) for p in possible_paths]}\n"
+            f"请确保数据文件存在于 data/{dataset}/ 目录下。"
         )
 
     logger.info(f"加载数据集: {file_path}")
@@ -97,6 +94,15 @@ def load_dataset(dataset: str, split: str) -> list[dict]:
                 records.append(item)
         else:
             raise ValueError(f"JSON 文件格式异常: 期望 list，得到 {type(data)}")
+
+    # 标准化字段: 将 "content" 映射为 "text"，标签映射为整数
+    for item in records:
+        # 文本字段: 数据集使用 "content"，统一为 "text"
+        if "text" not in item and "content" in item:
+            item["text"] = item["content"]
+        # 标签字段: 将字符串标签映射为整数
+        if "label" in item:
+            item["label"] = config.LABEL_MAP.get(item["label"], item["label"])
 
     logger.info(f"加载完成: {len(records)} 条记录")
     return records
@@ -171,8 +177,8 @@ def main():
         description="TruEDebate — 阶段 1: 多线程辩论生成"
     )
     parser.add_argument(
-        "--dataset", type=str, default="en", choices=["en", "cn"],
-        help="数据集语言 (en=ARG-EN, cn=ARG-CN)"
+        "--dataset", type=str, default="en", choices=["en", "zh"],
+        help="数据集语言 (en=ARG-EN, zh=ARG-CN)"
     )
     parser.add_argument(
         "--split", type=str, default="train", choices=["train", "val", "test"],

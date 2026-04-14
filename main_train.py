@@ -4,7 +4,7 @@ TruEDebate (TED) — 阶段 2: 本地模型训练与评估
 
 用法:
     python main_train.py --dataset en --epochs 20 --batch_size 4
-    python main_train.py --dataset cn --epochs 10 --batch_size 2 --device cpu
+    python main_train.py --dataset zh --epochs 10 --batch_size 2 --device cpu
 """
 
 import argparse
@@ -37,8 +37,8 @@ def main():
         description="TruEDebate — 阶段 2: 图神经网络训练与评估"
     )
     parser.add_argument(
-        "--dataset", type=str, default="en", choices=["en", "cn"],
-        help="数据集语言 (en=ARG-EN, cn=ARG-CN)"
+        "--dataset", type=str, default="en", choices=["en", "zh"],
+        help="数据集语言 (en=ARG-EN, zh=ARG-CN)"
     )
     parser.add_argument(
         "--epochs", type=int, default=config.EPOCHS,
@@ -80,7 +80,7 @@ def main():
     if device.type == "cuda":
         logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
         logger.info(
-            f"显存: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB"
+            f"显存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB"
         )
 
     # ── 加载数据集 ──

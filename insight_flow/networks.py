@@ -44,10 +44,13 @@ class TEDClassifier(nn.Module):
         bert_name = config.BERT_MODELS.get(lang, config.BERT_MODELS["en"])
         bert_hidden = config.BERT_HIDDEN_DIM
 
+        # 解析 BERT 模型路径: 优先使用本地目录，否则使用 HuggingFace 名称
+        bert_path = self._resolve_bert_path(bert_name)
+
         # ═══════ Sub-module 1: Role-aware Encoder ═══════
 
         # Text Encoder: BERT
-        self.bert = AutoModel.from_pretrained(bert_name)
+        self.bert = AutoModel.from_pretrained(bert_path)
         self._freeze_bert_layers(freeze_layers)
 
         # Role Embedding + Projection
@@ -124,6 +127,33 @@ class TEDClassifier(nn.Module):
             nn.Dropout(classifier_dropout),
             nn.Linear(proj_dim, 2),
         )
+
+    @staticmethod
+    def _resolve_bert_path(bert_name: str) -> str:
+        """
+        解析 BERT 模型加载路径。
+        优先检查本地 models/ 目录，若存在则使用本地路径，否则使用 HuggingFace 名称。
+
+        本地目录结构示例:
+            models/bert-base-uncased/config.json, model.safetensors, ...
+            models/chinese-bert-wwm-ext/config.json, model.safetensors, ...
+        """
+        from pathlib import Path
+
+        # 从 HuggingFace 名称提取目录名 (e.g. "hfl/chinese-bert-wwm-ext" → "chinese-bert-wwm-ext")
+        dir_name = bert_name.split("/")[-1]
+        local_path = config.BERT_LOCAL_DIR / dir_name
+
+        if local_path.exists() and (local_path / "config.json").exists():
+            return str(local_path)
+
+        # 也尝试完整路径 (e.g. "models/hfl/chinese-bert-wwm-ext")
+        full_local = config.BERT_LOCAL_DIR / bert_name
+        if full_local.exists() and (full_local / "config.json").exists():
+            return str(full_local)
+
+        # 本地未找到，使用 HuggingFace 名称 (会自动下载)
+        return bert_name
 
     def _freeze_bert_layers(self, freeze_layers: int) -> None:
         """冻结 BERT 的 embedding 层和前 N 个 encoder 层。"""
