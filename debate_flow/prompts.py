@@ -21,11 +21,16 @@ def _get_client() -> OpenAI:
     global _client
     if _client is None:
         api_key = config.OPENAI_API_KEY or os.getenv("OPENAI_API_KEY", "")
+        base_url = config.OPENAI_BASE_URL or os.getenv("OPENAI_BASE_URL", "")
         if not api_key:
             raise ValueError(
                 "OPENAI_API_KEY 未设置。请通过环境变量或 config.py 配置。"
             )
-        _client = OpenAI(api_key=api_key)
+        # 构建客户端参数
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        _client = OpenAI(**client_kwargs)
     return _client
 
 
