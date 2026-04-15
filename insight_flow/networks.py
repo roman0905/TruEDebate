@@ -35,7 +35,6 @@ class TEDClassifier(nn.Module):
         gat_dropout: float = config.GAT_DROPOUT,
         proj_dim: int = config.PROJ_DIM,
         mha_heads: int = config.MHA_HEADS,
-        classifier_dropout: float = config.CLASSIFIER_DROPOUT,
         freeze_layers: int = config.BERT_FREEZE_LAYERS,
     ):
         super().__init__()
@@ -119,14 +118,10 @@ class TEDClassifier(nn.Module):
         )
         self.mha_norm = nn.LayerNorm(proj_dim)
 
-        # ═══════ Sub-module 4: Classifier ═══════
-
-        self.classifier = nn.Sequential(
-            nn.Linear(proj_dim * 2, proj_dim),
-            nn.ReLU(),
-            nn.Dropout(classifier_dropout),
-            nn.Linear(proj_dim, 2),
-        )
+        # ═══════ Sub-module 4: Classifier (Eq.12) ═══════
+        # 论文: y_hat = softmax(W_fc * h + b_fc)
+        # CrossEntropyLoss 内置 softmax，所以输出 logits 即可
+        self.classifier = nn.Linear(proj_dim * 2, 2)
 
     @staticmethod
     def _resolve_bert_path(bert_name: str) -> str:

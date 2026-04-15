@@ -118,16 +118,19 @@ class DebateModel(Model):
         """
         导出完整的辩论记录，包含图结构信息。
 
+        论文中原始新闻不作为图节点，而是通过 Encoder(F) 编码后
+        与图表示做 Interactive Attention (Eq.10)。
+
         Returns:
             dict 包含：
-                - nodes: [{text, role_id, role_name}] (8 个节点)
+                - nodes: [{text, role_id, role_name}] (7 个节点: 6 辩论 + 1 综合)
                 - edge_index: [[src...], [dst...]]
                 - synthesis: 综合总结文本
         """
-        # 按 role_id 顺序组装节点 (0-7)
+        # 按 role_id 顺序组装节点 (0-6)
         nodes = []
 
-        # 角色节点 (0-5)
+        # 辩论角色节点 (0-5)
         role_order = [
             "proponent_opening",
             "opponent_opening",
@@ -149,13 +152,6 @@ class DebateModel(Model):
             "text": self.synthesis_text,
             "role_id": config.ROLE_IDS["synthesis"],
             "role_name": "synthesis",
-        })
-
-        # Original News 节点 (7)
-        nodes.append({
-            "text": self.news_text,
-            "role_id": config.ROLE_IDS["original_news"],
-            "role_name": "original_news",
         })
 
         # 构建 edge_index: [2, num_edges]
