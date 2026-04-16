@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch_geometric.loader import DataLoader
 from sklearn.metrics import f1_score, accuracy_score, classification_report
 
@@ -75,7 +75,7 @@ def train_one_epoch(
 
         # 前向传播
         if use_amp:
-            with autocast(device_type=str(device).split(":")[0]):
+            with autocast(str(device).split(":")[0]):
                 logits = model(
                     node_input_ids=node_input_ids,
                     node_attention_mask=node_attention_mask,
@@ -253,7 +253,7 @@ def train(
         {"params": other_params, "lr": lr},
     ], weight_decay=weight_decay)
 
-    scaler = GradScaler() if (use_amp and device.type == "cuda") else None
+    scaler = GradScaler(str(device)) if (use_amp and device.type == "cuda") else None
 
     best_val_f1 = 0.0
     best_metrics = {}

@@ -211,3 +211,9 @@ data/
 
 # 忽略根目录的配置文件
 config.py
+# 忽略 output 文件夹及其下面的所有 json 文件
+output/
+
+# 忽略具体的论文和生成的文本文件
+*.pdf
+_paper_text.txt
