@@ -210,7 +210,7 @@ __marimo__/
 data/
 
 # 忽略根目录的配置文件
-config.py
+#config.py
 # 忽略 output 文件夹及其下面的所有 json 文件
 output/
 

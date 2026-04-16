@@ -6,7 +6,8 @@ TruEDebate (TED) — Analysis Agent 网络架构
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GATConv, global_mean_pool
+from torch_geometric.nn import GATConv
+from torch_geometric.utils import to_dense_batch
 from transformers import AutoModel
 
 import config
@@ -18,8 +19,8 @@ class TEDClassifier(nn.Module):
 
     架构:
         1. Role-aware Encoder: BERT(text) || Linear(RoleEmbed) → node features
-        2. GAT: 多层 GATConv + global_mean_pool → graph-level debate repr
-        3. Debate-News MHA: MultiheadAttention(news, debate, debate) → interaction
+        2. GAT: 多层 GATConv → 节点级 debate features
+        3. Debate-News MHA: Query(news) attends over node-level debate Key/Value
         4. Classifier: Linear([debate_proj; mha_out]) → 2-class logits
     """
 
@@ -35,6 +36,7 @@ class TEDClassifier(nn.Module):
         gat_dropout: float = config.GAT_DROPOUT,
         proj_dim: int = config.PROJ_DIM,
         mha_heads: int = config.MHA_HEADS,
+        classifier_dropout: float = config.CLASSIFIER_DROPOUT,
         freeze_layers: int = config.BERT_FREEZE_LAYERS,
     ):
         super().__init__()
@@ -106,7 +108,7 @@ class TEDClassifier(nn.Module):
 
         # ═══════ Sub-module 3: Debate-News Interactive Attention ═══════
 
-        # 投影层: 将 debate graph repr 和 news repr 映射到相同维度
+        # 投影层: 将 debate 节点表征和 news 表征映射到相同维度
         self.debate_proj = nn.Linear(gat_hidden_dim, proj_dim)
         self.news_proj = nn.Linear(bert_hidden, proj_dim)
 
@@ -121,6 +123,7 @@ class TEDClassifier(nn.Module):
         # ═══════ Sub-module 4: Classifier (Eq.12) ═══════
         # 论文: y_hat = softmax(W_fc * h + b_fc)
         # CrossEntropyLoss 内置 softmax，所以输出 logits 即可
+        self.classifier_dropout = nn.Dropout(classifier_dropout)
         self.classifier = nn.Linear(proj_dim * 2, 2)
 
     @staticmethod
@@ -233,25 +236,34 @@ class TEDClassifier(nn.Module):
                 x = self.gat_activation(x)
                 x = self.gat_dropout(x)
 
-        # Global mean pooling → [batch_size, gat_hidden_dim]
-        graph_repr = global_mean_pool(x, batch)
-
         # ── 3. Debate-News Interactive Attention ──
 
         # 3a. BERT 编码新闻文本 → [batch_size, 768]
         news_features = self._encode_texts(news_input_ids, news_attention_mask)
 
         # 3b. 线性投影到相同维度
-        g_proj = self.debate_proj(graph_repr)   # [batch_size, proj_dim]
+        node_proj = self.debate_proj(x)         # [total_nodes, proj_dim]
+        node_dense, node_mask = to_dense_batch(node_proj, batch)
+        # node_dense: [batch_size, max_nodes, proj_dim]
+        # node_mask:  [batch_size, max_nodes] (True 表示有效节点)
+
+        # debate 分支使用 mask-aware mean pooling
+        node_mask_f = node_mask.unsqueeze(-1).to(node_dense.dtype)
+        g_proj = (node_dense * node_mask_f).sum(dim=1) / node_mask_f.sum(dim=1).clamp_min(1.0)
+
         e_proj = self.news_proj(news_features)  # [batch_size, proj_dim]
 
-        # 3c. MHA: Query=news, Key=debate, Value=debate
-        # nn.MultiheadAttention 需要 [batch_size, seq_len, embed_dim]
-        # 这里 seq_len=1（单向量），所以 unsqueeze
+        # 3c. MHA: Query=news, Key/Value=节点级 debate 表示
+        # key_padding_mask 中 True 代表忽略该位置（无效填充节点）
         q = e_proj.unsqueeze(1)     # [batch_size, 1, proj_dim]
-        kv = g_proj.unsqueeze(1)    # [batch_size, 1, proj_dim]
+        kv = node_dense             # [batch_size, max_nodes, proj_dim]
 
-        attn_output, _ = self.mha(q, kv, kv)   # [batch_size, 1, proj_dim]
+        attn_output, _ = self.mha(
+            q,
+            kv,
+            kv,
+            key_padding_mask=~node_mask,
+        )  # [batch_size, 1, proj_dim]
         attn_output = attn_output.squeeze(1)     # [batch_size, proj_dim]
         attn_output = self.mha_norm(attn_output)
 
@@ -259,6 +271,7 @@ class TEDClassifier(nn.Module):
 
         # 拼接 debate projection 和 MHA 交互表征
         combined = torch.cat([g_proj, attn_output], dim=-1)  # [batch_size, proj_dim*2]
+        combined = self.classifier_dropout(combined)
         logits = self.classifier(combined)                    # [batch_size, 2]
 
         return logits
