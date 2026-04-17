@@ -9,6 +9,7 @@ TruEDebate (TED) — 阶段 2: 本地模型训练与评估
 
 import argparse
 import logging
+import os
 import sys
 
 import torch
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    default_workers = 0 if os.name == "nt" else min(config.MAX_WORKERS, os.cpu_count() or 1)
+
     parser = argparse.ArgumentParser(
         description="TruEDebate — 阶段 2: 图神经网络训练与评估"
     )
@@ -53,6 +56,10 @@ def main():
         help="学习率"
     )
     parser.add_argument(
+        "--weight_decay", type=float, default=config.WEIGHT_DECAY,
+        help="权重衰减"
+    )
+    parser.add_argument(
         "--device", type=str, default=None,
         help="训练设备 (cuda / cpu，默认自动检测)"
     )
@@ -67,6 +74,10 @@ def main():
     parser.add_argument(
         "--freeze_layers", type=int, default=config.BERT_FREEZE_LAYERS,
         help="冻结 BERT 前 N 层"
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=default_workers,
+        help="DataLoader 并行 worker 数"
     )
     args = parser.parse_args()
 
@@ -106,26 +117,31 @@ def main():
 
     # ── 创建 DataLoader ──
     # PyG DataLoader 自动处理图的 batching (合并 edge_index, 生成 batch vector)
+    loader_kwargs = {
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
+        "pin_memory": device.type == "cuda",
+    }
+    if args.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 2
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
         shuffle=True,
-        num_workers=0,  # Windows 下避免多进程问题
         drop_last=False,
+        **loader_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
         shuffle=False,
-        num_workers=0,
+        **loader_kwargs,
     )
     test_loader = None
     if test_dataset:
         test_loader = DataLoader(
             test_dataset,
-            batch_size=args.batch_size,
             shuffle=False,
-            num_workers=0,
+            **loader_kwargs,
         )
 
     # ── 创建模型 ──
@@ -150,8 +166,10 @@ def main():
     logger.info(f"  Grad Accum:  {args.grad_accum}")
     logger.info(f"  Effective BS: {args.batch_size * args.grad_accum}")
     logger.info(f"  Learning Rate: {args.lr}")
+    logger.info(f"  Weight Decay: {args.weight_decay}")
     logger.info(f"  AMP:         {not args.no_amp}")
     logger.info(f"  BERT Freeze: {args.freeze_layers} layers")
+    logger.info(f"  Num Workers: {args.num_workers}")
     logger.info("=" * 60)
 
     # 更新全局梯度累积配置
@@ -165,6 +183,7 @@ def main():
         device=device,
         epochs=args.epochs,
         lr=args.lr,
+        weight_decay=args.weight_decay,
         use_amp=not args.no_amp,
     )
 

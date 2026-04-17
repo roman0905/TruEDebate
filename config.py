@@ -50,7 +50,9 @@ EDGE_LIST = [
     (0, 1), (1, 0),  # Pro-Opening ↔ Opp-Opening
     (2, 3), (3, 2),  # Pro-Questioner ↔ Opp-Questioner
     (4, 5), (5, 4),  # Pro-Closing ↔ Opp-Closing
-    # 综合边: Stage 3 → Synthesis
+    # 综合边: 全部发言节点 → Synthesis
+    (0, 6), (1, 6),
+    (2, 6), (3, 6),
     (4, 6), (5, 6),
 ]
 
@@ -67,7 +69,7 @@ BERT_MODELS = {
 }
 BERT_MAX_LENGTH = 256
 BERT_HIDDEN_DIM = 768
-BERT_FREEZE_LAYERS = 8  # 冻结前 N 层以节省显存
+BERT_FREEZE_LAYERS = 6  # 建议冻结前 6 层，平衡稳定性与可塑性
 
 # ──────────────────────────────── 标签映射 ────────────────────────────────
 # 中文数据集使用字符串标签 "real"/"fake"，需要映射为整数
@@ -80,21 +82,28 @@ LABEL_MAP = {
 # ──────────────────────────────── 模型超参数 ────────────────────────────────
 ROLE_EMBED_DIM = 32
 ROLE_PROJ_DIM = BERT_HIDDEN_DIM  # 论文 Eq.6: Wrole ∈ R^(dh×dr)，投影到与 BERT 隐层同维度
-GAT_HIDDEN_DIM = 128
+GAT_HIDDEN_DIM = 128 # 论文中 GAT 隐层维度最原始设置 dh = 128
 GAT_HEADS = 4
-GAT_LAYERS = 2
+GAT_LAYERS = 2 # 论文中 GAT最原始设置 层数 L = 2
 GAT_DROPOUT = 0.3
 PROJ_DIM = 128
 MHA_HEADS = 4
-CLASSIFIER_DROPOUT = 0.1
+CLASSIFIER_DROPOUT = 0.3 # 论文中分类器 dropout 最原始设置为 0.1
 
 # ──────────────────────────────── 训练超参数 ────────────────────────────────
 BATCH_SIZE = 4
-LEARNING_RATE = 2e-5
-WEIGHT_DECAY = 1e-4
-EPOCHS = 20
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 1e-2
+EPOCHS = 30
 GRAD_ACCUM_STEPS = 4  # 梯度累积步数 (有效 batch_size = BATCH_SIZE * GRAD_ACCUM_STEPS)
 USE_AMP = True  # 混合精度训练
+BERT_LR_FACTOR = 0.1
+WARMUP_RATIO = 0.1
+MIN_LR_RATIO = 0.01
+EARLY_STOPPING_PATIENCE = 5
+LABEL_SMOOTHING = 0.05
+USE_CLASS_WEIGHT = True
+GRAD_CLIP_MAX_NORM = 1.0
 
 # ──────────────────────────────── 生成配置 ────────────────────────────────
 MAX_WORKERS = 4  # 多线程并发数
