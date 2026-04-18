@@ -223,7 +223,7 @@ def _estimate_class_weights(dataset, device: torch.device) -> torch.Tensor | Non
     """
     从数据集 JSON 标签估计类别权重。
 
-    采用总数/类别数 的逆频率权重，适配二分类 real(0)/fake(1)。
+    采用平方根逆频率权重，相比线性逆频率更温和，避免过度补偿少数类。
     """
     file_paths = getattr(dataset, "file_paths", None)
     if not file_paths:
@@ -243,7 +243,12 @@ def _estimate_class_weights(dataset, device: torch.device) -> torch.Tensor | Non
     if torch.any(class_counts == 0):
         return None
 
-    weights = class_counts.sum() / (2.0 * class_counts)
+    # 使用平方根逆频率：weight = sqrt(total / count) / sum(sqrt(total / count))
+    # 这比线性逆频率更温和，避免过度惩罚多数类
+    total = class_counts.sum()
+    sqrt_inv_freq = torch.sqrt(total / class_counts)
+    weights = sqrt_inv_freq / sqrt_inv_freq.sum() * 2.0  # 归一化到均值为 1
+
     return weights.to(device)
 
 

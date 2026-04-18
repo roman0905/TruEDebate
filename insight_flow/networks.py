@@ -65,6 +65,7 @@ class TEDClassifier(nn.Module):
         self.gat_layers = nn.ModuleList()
         self.gat_norms = nn.ModuleList()
 
+        # 论文使用 2 层 GAT，都使用 multi-head concat
         # 第一层 GAT: node_dim → gat_hidden_dim (multi-head, concat)
         self.gat_layers.append(
             GATConv(
@@ -77,26 +78,13 @@ class TEDClassifier(nn.Module):
         )
         self.gat_norms.append(nn.LayerNorm(gat_hidden_dim * gat_heads))
 
-        # 中间层 (如果 gat_layers > 2)
-        for _ in range(gat_layers - 2):
-            self.gat_layers.append(
-                GATConv(
-                    in_channels=gat_hidden_dim * gat_heads,
-                    out_channels=gat_hidden_dim,
-                    heads=gat_heads,
-                    concat=True,
-                    dropout=gat_dropout,
-                )
-            )
-            self.gat_norms.append(nn.LayerNorm(gat_hidden_dim * gat_heads))
-
-        # 最后一层 GAT: → gat_hidden_dim (single-head, no concat)
+        # 第二层 GAT: gat_hidden_dim * heads → gat_hidden_dim (multi-head, average)
         self.gat_layers.append(
             GATConv(
                 in_channels=gat_hidden_dim * gat_heads,
                 out_channels=gat_hidden_dim,
-                heads=1,
-                concat=False,
+                heads=gat_heads,
+                concat=False,  # 使用 average 而非 concat
                 dropout=gat_dropout,
             )
         )
@@ -248,12 +236,15 @@ class TEDClassifier(nn.Module):
         e_proj = self.news_proj(news_features)  # [batch_size, proj_dim]
 
         # 3c. MHA: Query=news, Key/Value=图级 debate 表示
+        # 添加残差连接，增强信息流动
         q = e_proj.unsqueeze(1)     # [batch_size, 1, proj_dim]
         kv = g_proj.unsqueeze(1)    # [batch_size, 1, proj_dim]
 
         attn_output, _ = self.mha(q, kv, kv)   # [batch_size, 1, proj_dim]
         attn_output = attn_output.squeeze(1)     # [batch_size, proj_dim]
-        attn_output = self.mha_norm(attn_output)
+
+        # 残差连接 + LayerNorm
+        attn_output = self.mha_norm(attn_output + e_proj)
 
         # ── 4. 分类器 ──
 
