@@ -82,26 +82,26 @@ LABEL_MAP = {
 # ──────────────────────────────── 模型超参数 ────────────────────────────────
 ROLE_EMBED_DIM = 32
 ROLE_PROJ_DIM = BERT_HIDDEN_DIM  # 论文 Eq.6: Wrole ∈ R^(dh×dr)，投影到与 BERT 隐层同维度
-GAT_HIDDEN_DIM = 128 # 论文中 GAT 隐层维度最原始设置 dh = 128
+GAT_HIDDEN_DIM = 256  # 增加容量：128 → 256，提升模型表达能力
 GAT_HEADS = 4
 GAT_LAYERS = 2 # 论文中 GAT最原始设置 层数 L = 2
-GAT_DROPOUT = 0.2  # 降低 dropout，从 0.3 → 0.2，减少过拟合但保留学习能力
-PROJ_DIM = 128
+GAT_DROPOUT = 0.1  # 进一步降低 dropout，回归论文原始设置
+PROJ_DIM = 256  # 增加投影维度：128 → 256，与 GAT_HIDDEN_DIM 保持一致
 MHA_HEADS = 4
-CLASSIFIER_DROPOUT = 0.2  # 降低 dropout，从 0.3 → 0.2，论文原始为 0.1
+CLASSIFIER_DROPOUT = 0.1  # 回归论文原始设置
 
 # ──────────────────────────────── 训练超参数 ────────────────────────────────
 BATCH_SIZE = 4
-LEARNING_RATE = 2e-4  # 提高学习率从 1e-4 → 2e-4，加快收敛
+LEARNING_RATE = 1e-4  # 回退到稳定的学习率
 WEIGHT_DECAY = 1e-2
 EPOCHS = 30
 GRAD_ACCUM_STEPS = 4  # 梯度累积步数 (有效 batch_size = BATCH_SIZE * GRAD_ACCUM_STEPS)
 USE_AMP = True  # 混合精度训练
 BERT_LR_FACTOR = 0.1
-WARMUP_RATIO = 0.1
+WARMUP_RATIO = 0.15  # 增加 warmup 比例：0.1 → 0.15，更平滑的学习率上升
 MIN_LR_RATIO = 0.01
-EARLY_STOPPING_PATIENCE = 7  # 增加 patience 从 5 → 7，给模型更多恢复机会
-LABEL_SMOOTHING = 0.1  # 增加 label smoothing 从 0.05 → 0.1，缓解类别不平衡
+EARLY_STOPPING_PATIENCE = 8  # 进一步增加 patience：7 → 8
+LABEL_SMOOTHING = 0.1
 USE_CLASS_WEIGHT = True
 GRAD_CLIP_MAX_NORM = 1.0
 

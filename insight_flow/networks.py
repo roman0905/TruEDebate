@@ -6,7 +6,7 @@ TruEDebate (TED) — Analysis Agent 网络架构
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GATConv, global_mean_pool
+from torch_geometric.nn import GATConv, global_mean_pool, global_max_pool
 from transformers import AutoModel
 
 import config
@@ -217,8 +217,16 @@ class TEDClassifier(nn.Module):
         for i, (gat_layer, norm) in enumerate(
             zip(self.gat_layers, self.gat_norms)
         ):
+            # 保存残差
+            identity = x if i > 0 else None
+
             x = gat_layer(x, edge_index)       # GATConv
             x = norm(x)                         # LayerNorm
+
+            # 添加残差连接（从第二层开始）
+            if identity is not None and identity.shape == x.shape:
+                x = x + identity
+
             if i < len(self.gat_layers) - 1:    # 非最后一层加激活和 dropout
                 x = self.gat_activation(x)
                 x = self.gat_dropout(x)
