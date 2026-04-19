@@ -1,30 +1,25 @@
 """
-TruEDebate (TED) — Analysis Agent 网络架构 V3 (Innovation Edition)
+TruEDebate (TED) — Analysis Agent 网络架构 V4 (Synthesis-as-Auxiliary-Query)
 
-针对原论文实现的关键问题，进行了三大创新改进：
+【V4 核心修正】根据论文 Algorithm 1 重新设计图结构与 Synthesis 的使用方式：
 
-【创新点 1】Node-level Cross-Attention (修复论文公式退化)
-原论文 Eq.10: c = MHA(e_F^proj, g^proj, g^proj) 中 g^proj 是单一向量，
-导致 MHA 退化为简单线性变换。本实现将 K/V 改为 GAT 输出的所有节点表征，
-让 News 真正"注意"到不同的辩论发言。
+1. 【图结构修正】图 V 只含 6 个辩论节点（论文原意），不包含 Synthesis
+2. 【Synthesis 作为辅助 Query】不作为图节点，而是：
+   - 独立 BERT 编码得到 e_synth
+   - 作为第二个 Query 对辩论图做 Cross-Attention: c_synth = MHA(e_synth, node_dense, node_dense)
+   - 与 News Query 的交互表示 c_news 并列融合
+   - 体现"Synthesis bridges the debate discourse and analytical processes" (论文原话)
 
-【创新点 2】Stance-Aware Dual-Branch Pooling (利用辩论的二分图结构)
-辩论天然是 Proponent vs Opponent 的二分结构。本实现：
-  - 分别聚合正方节点 (roles 0,2,4) 得到 g_pro
-  - 分别聚合反方节点 (roles 1,3,5) 得到 g_opp
-  - 计算立场分歧 divergence = |g_pro - g_opp| 作为显式信号
+3. 【保留双分支立场池化】显式建模 Pro vs Opp 的对抗
+4. 【修复 MHA 退化】News 和 Synthesis 都对节点级表征做真正的交互注意力
 
-【创新点 3】Multi-View Feature Fusion (多视图特征融合)
-最终分类器输入：[g_global; c_attention; divergence]
-  - g_global: 全图聚合表示 (论文原始)
-  - c_attention: 节点级交互注意力 (创新点1)
-  - divergence: 立场分歧信号 (创新点2)
+最终分类器输入：[g_global; c_news; c_synth; divergence]
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GATv2Conv, global_mean_pool
+from torch_geometric.nn import GATv2Conv
 from torch_geometric.utils import to_dense_batch
 from transformers import AutoModel
 
@@ -33,19 +28,18 @@ import config
 
 class TEDClassifier(nn.Module):
     """
-    TruEDebate Analysis Agent 增强版本 (V3)。
+    TruEDebate Analysis Agent V4。
 
-    核心创新：
-    1. 修复 MHA 退化：使用节点级 K/V 进行真正的交互注意力
-    2. 立场感知双分支：分别聚合 Pro/Opp 阵营，计算分歧信号
-    3. 多视图融合：全图 + 注意力 + 立场分歧 三路特征
-    4. GATv2Conv：比 GATConv 更具表达力的注意力机制
+    输入:
+        - node_input_ids: [6 辩论节点]  (不含 Synthesis)
+        - news_input_ids: [新闻]
+        - synth_input_ids: [Synthesis 辅助文本]
+
+    输出: [batch_size, 2] 二分类 logits
     """
 
-    # Pro/Opp 角色 ID 定义 (与 config.ROLE_IDS 对应)
-    PRO_ROLE_IDS = [0, 2, 4]  # proponent_opening, proponent_questioner, proponent_closing
-    OPP_ROLE_IDS = [1, 3, 5]  # opponent_opening, opponent_questioner, opponent_closing
-    SYNTHESIS_ROLE_ID = 6
+    PRO_ROLE_IDS = [0, 2, 4]
+    OPP_ROLE_IDS = [1, 3, 5]
 
     def __init__(
         self,
@@ -70,8 +64,9 @@ class TEDClassifier(nn.Module):
 
         bert_path = self._resolve_bert_path(bert_name)
 
-        # ═══════ Sub-module 1: Role-aware Encoder ═══════
+        # ═══════ Sub-module 1: Role-aware Encoder (BERT + Role Embedding) ═══════
 
+        # BERT 在辩论节点、新闻、Synthesis 间共享 (参数效率 + 语义一致性)
         self.bert = AutoModel.from_pretrained(bert_path)
         self._freeze_bert_layers(freeze_layers)
 
@@ -80,12 +75,12 @@ class TEDClassifier(nn.Module):
 
         node_dim = bert_hidden + role_proj_dim
 
-        # ═══════ Sub-module 2: GAT (使用 GATv2 提升表达力) ═══════
+        # ═══════ Sub-module 2: Debate Graph GAT (仅 6 辩论节点) ═══════
 
         self.gat_layers = nn.ModuleList()
         self.gat_norms = nn.ModuleList()
 
-        # 第一层：node_dim → gat_hidden_dim (multi-head concat)
+        # 第一层: node_dim → gat_hidden_dim (multi-head concat)
         self.gat_layers.append(
             GATv2Conv(
                 in_channels=node_dim,
@@ -98,7 +93,7 @@ class TEDClassifier(nn.Module):
         )
         self.gat_norms.append(nn.LayerNorm(gat_hidden_dim * gat_heads))
 
-        # 第二层：gat_hidden_dim*heads → gat_hidden_dim (multi-head average)
+        # 第二层: gat_hidden_dim*heads → gat_hidden_dim (multi-head average)
         self.gat_layers.append(
             GATv2Conv(
                 in_channels=gat_hidden_dim * gat_heads,
@@ -114,29 +109,42 @@ class TEDClassifier(nn.Module):
         self.gat_activation = nn.ELU()
         self.gat_dropout = nn.Dropout(gat_dropout)
 
-        # GAT 输入维度对齐（用于残差连接）
-        self.gat_input_proj = nn.Linear(node_dim, gat_hidden_dim * gat_heads, bias=False)
+        # GAT 第一层残差连接 (维度对齐)
+        self.gat_input_proj = nn.Linear(
+            node_dim, gat_hidden_dim * gat_heads, bias=False
+        )
 
-        # ═══════ Sub-module 3: 节点级投影 + 多路注意力 ═══════
+        # ═══════ Sub-module 3: 投影层 (节点/新闻/Synthesis → proj_dim) ═══════
 
-        # 节点投影：将 GAT 输出映射到 proj_dim
         self.node_proj = nn.Linear(gat_hidden_dim, proj_dim)
         self.news_proj = nn.Linear(bert_hidden, proj_dim)
+        self.synth_proj = nn.Linear(bert_hidden, proj_dim)
 
-        # 【创新1】节点级交互注意力（修复 MHA 退化）
-        self.cross_attn = nn.MultiheadAttention(
+        # ═══════ Sub-module 4: 双路 Cross-Attention ═══════
+
+        # 【关键】News Cross-Attention: News 作为 Query，辩论节点作为 K/V
+        self.news_cross_attn = nn.MultiheadAttention(
             embed_dim=proj_dim,
             num_heads=mha_heads,
             dropout=gat_dropout,
             batch_first=True,
         )
-        self.cross_attn_norm = nn.LayerNorm(proj_dim)
+        self.news_attn_norm = nn.LayerNorm(proj_dim)
 
-        # ═══════ Sub-module 4: 多视图分类器 ═══════
+        # 【关键】Synthesis Cross-Attention: Synthesis 作为 Query，辩论节点作为 K/V
+        # 这体现了论文 "Synthesis bridges the debate and analytical processes"
+        self.synth_cross_attn = nn.MultiheadAttention(
+            embed_dim=proj_dim,
+            num_heads=mha_heads,
+            dropout=gat_dropout,
+            batch_first=True,
+        )
+        self.synth_attn_norm = nn.LayerNorm(proj_dim)
 
-        # 输入特征维度: [g_global(P) + c_attn(P) + divergence(P)] = 3P
-        # 其中 P = proj_dim
-        fusion_input_dim = proj_dim * 3
+        # ═══════ Sub-module 5: 多视图融合分类器 ═══════
+
+        # 输入: [g_global; c_news; c_synth; divergence] = 4 * proj_dim
+        fusion_input_dim = proj_dim * 4
 
         self.classifier = nn.Sequential(
             nn.Linear(fusion_input_dim, proj_dim),
@@ -175,33 +183,23 @@ class TEDClassifier(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
+        """BERT 编码，返回 [CLS] token 向量。"""
         outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
         )
-        cls_features = outputs.last_hidden_state[:, 0, :]
-        return cls_features
+        return outputs.last_hidden_state[:, 0, :]
 
     def _masked_mean_pool(
         self,
         node_dense: torch.Tensor,
         mask: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        基于 mask 的安全均值池化。
-
-        Args:
-            node_dense: [B, N, D] 节点稠密表征
-            mask: [B, N] 布尔 mask (True 表示有效节点)
-
-        Returns:
-            pooled: [B, D] 池化后的图级表征
-        """
-        mask_f = mask.unsqueeze(-1).float()  # [B, N, 1]
+        """基于 mask 的安全均值池化。"""
+        mask_f = mask.unsqueeze(-1).float()
         weighted = node_dense * mask_f
-        denom = mask_f.sum(dim=1).clamp(min=1.0)  # [B, 1]
-        pooled = weighted.sum(dim=1) / denom
-        return pooled
+        denom = mask_f.sum(dim=1).clamp(min=1.0)
+        return weighted.sum(dim=1) / denom
 
     def forward(
         self,
@@ -212,16 +210,22 @@ class TEDClassifier(nn.Module):
         batch: torch.Tensor,
         news_input_ids: torch.Tensor,
         news_attention_mask: torch.Tensor,
+        synth_input_ids: torch.Tensor,
+        synth_attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        # ── 1. Role-aware Encoder ──
-        node_text_features = self._encode_texts(node_input_ids, node_attention_mask)
+        # ── 1. Role-aware Encoder (6 辩论节点) ──
+        node_text_features = self._encode_texts(
+            node_input_ids, node_attention_mask
+        )  # [total_nodes=B*6, 768]
         role_emb = self.role_embedding(role_ids)
         role_proj = self.role_proj(role_emb)
-        node_features = torch.cat([node_text_features, role_proj], dim=-1)
+        node_features = torch.cat(
+            [node_text_features, role_proj], dim=-1
+        )  # [total_nodes, node_dim]
 
-        # ── 2. GAT 消息传播 (带残差连接) ──
+        # ── 2. GAT 消息传播 (带残差) ──
         x = node_features
-        x_residual = self.gat_input_proj(node_features)  # 用于第一层残差
+        x_residual = self.gat_input_proj(node_features)
 
         for i, (gat_layer, norm) in enumerate(
             zip(self.gat_layers, self.gat_norms)
@@ -230,7 +234,6 @@ class TEDClassifier(nn.Module):
             x = gat_layer(x, edge_index)
             x = norm(x)
 
-            # 残差连接：第一层用 gat_input_proj，第二层用前层输出
             if i == 0:
                 x = x + x_residual
             elif x_in.shape == x.shape:
@@ -242,37 +245,46 @@ class TEDClassifier(nn.Module):
 
         # x: [total_nodes, gat_hidden_dim]
 
-        # ── 3. 节点级投影 + 转为稠密批 ──
-        node_proj = self.node_proj(x)  # [total_nodes, proj_dim]
-        # 转换为 dense 形式: [B, max_nodes, proj_dim] + mask
+        # ── 3. 节点级投影 + 稠密批 ──
+        node_proj = self.node_proj(x)  # [total_nodes, P]
         node_dense, node_mask = to_dense_batch(node_proj, batch)
-        # role_ids 也转为 dense 形式以便构造 Pro/Opp mask
+        # node_dense: [B, 6, P]; node_mask: [B, 6] (全为 True，因为每图 6 节点)
         role_dense, _ = to_dense_batch(role_ids, batch, fill_value=-1)
 
         # ── 4. 新闻编码 + 投影 ──
         news_features = self._encode_texts(news_input_ids, news_attention_mask)
-        e_proj = self.news_proj(news_features)  # [B, proj_dim]
+        e_news = self.news_proj(news_features)  # [B, P]
 
-        # ── 5. 【创新1】节点级 Cross-Attention ──
-        # News 作为 Query，所有辩论节点作为 K/V
-        # KV 是 [B, max_nodes, P]，真正实现多对一的交互注意力
-        q = e_proj.unsqueeze(1)  # [B, 1, P]
-        # key_padding_mask: True 表示需要被忽略
-        attn_output, _ = self.cross_attn(
-            q,
+        # ── 5. Synthesis 编码 + 投影 ──
+        synth_features = self._encode_texts(synth_input_ids, synth_attention_mask)
+        e_synth = self.synth_proj(synth_features)  # [B, P]
+
+        # ── 6. 【核心1】News Cross-Attention ──
+        q_news = e_news.unsqueeze(1)  # [B, 1, P]
+        c_news, _ = self.news_cross_attn(
+            q_news,
             node_dense,
             node_dense,
             key_padding_mask=~node_mask,
         )
-        c_attn = attn_output.squeeze(1)  # [B, P]
-        # 残差 + LayerNorm，稳定训练
-        c_attn = self.cross_attn_norm(c_attn + e_proj)
+        c_news = c_news.squeeze(1)  # [B, P]
+        c_news = self.news_attn_norm(c_news + e_news)  # 残差
 
-        # ── 6. 全图均值池化（论文原始路径）──
+        # ── 7. 【核心2】Synthesis Cross-Attention ──
+        q_synth = e_synth.unsqueeze(1)  # [B, 1, P]
+        c_synth, _ = self.synth_cross_attn(
+            q_synth,
+            node_dense,
+            node_dense,
+            key_padding_mask=~node_mask,
+        )
+        c_synth = c_synth.squeeze(1)  # [B, P]
+        c_synth = self.synth_attn_norm(c_synth + e_synth)  # 残差
+
+        # ── 8. 全图均值池化 ──
         g_global = self._masked_mean_pool(node_dense, node_mask)  # [B, P]
 
-        # ── 7. 【创新2】立场感知双分支聚合 ──
-        # 构造 Pro/Opp 掩码（基于 role_id）
+        # ── 9. 【核心3】立场感知双分支聚合 ──
         pro_mask = torch.zeros_like(node_mask)
         for r in self.PRO_ROLE_IDS:
             pro_mask = pro_mask | (role_dense == r)
@@ -283,14 +295,18 @@ class TEDClassifier(nn.Module):
             opp_mask = opp_mask | (role_dense == r)
         opp_mask = opp_mask & node_mask
 
-        g_pro = self._masked_mean_pool(node_dense, pro_mask)  # [B, P]
-        g_opp = self._masked_mean_pool(node_dense, opp_mask)  # [B, P]
+        g_pro = self._masked_mean_pool(node_dense, pro_mask)
+        g_opp = self._masked_mean_pool(node_dense, opp_mask)
 
-        # 立场分歧信号（绝对差异）
+        # 立场分歧信号
         divergence = torch.abs(g_pro - g_opp)  # [B, P]
 
-        # ── 8. 多视图特征融合 + 分类 ──
-        combined = torch.cat([g_global, c_attn, divergence], dim=-1)  # [B, 3P]
+        # ── 10. 多视图融合 + 分类 ──
+        combined = torch.cat(
+            [g_global, c_news, c_synth, divergence],
+            dim=-1,
+        )  # [B, 4P]
+
         logits = self.classifier(combined)  # [B, 2]
 
         return logits
@@ -302,11 +318,9 @@ class FocalLoss(nn.Module):
 
     FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
 
-    针对 ARG-EN 的严重类别不平衡 (Real:Fake ≈ 3:1 训练集，4:1 验证/测试集)
-    Focal Loss 对 hard examples (即模型预测不准的样本) 给予更高权重，
-    比单纯的 class weight 更适合处理动态难度。
-
-    支持 label smoothing。
+    注意：V4 默认使用 CrossEntropy + class_weight (config.USE_FOCAL_LOSS=False)
+    因为 V3 实验显示 Focal Loss 反而过拟合、val acc 下降。
+    保留此类以便消融实验。
     """
 
     def __init__(
@@ -323,15 +337,9 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            logits: [B, num_classes]
-            targets: [B] 整数类标签
-        """
         num_classes = logits.size(-1)
-        log_probs = F.log_softmax(logits, dim=-1)  # [B, C]
+        log_probs = F.log_softmax(logits, dim=-1)
 
-        # Label smoothing 转为软标签
         if self.label_smoothing > 0:
             with torch.no_grad():
                 soft_targets = torch.full_like(
@@ -343,18 +351,15 @@ class FocalLoss(nn.Module):
                     targets.unsqueeze(1),
                     1.0 - self.label_smoothing,
                 )
-            ce = -(soft_targets * log_probs).sum(dim=-1)  # [B]
-            # 计算 p_t (真实类的预测概率)
+            ce = -(soft_targets * log_probs).sum(dim=-1)
             with torch.no_grad():
                 p_t = log_probs.exp().gather(1, targets.unsqueeze(1)).squeeze(1)
         else:
-            ce = F.nll_loss(log_probs, targets, reduction="none")  # [B]
+            ce = F.nll_loss(log_probs, targets, reduction="none")
             p_t = log_probs.exp().gather(1, targets.unsqueeze(1)).squeeze(1)
 
-        # Focal weight: (1 - p_t)^gamma
         focal_weight = (1.0 - p_t).pow(self.gamma)
 
-        # Class weight (alpha)
         if self.alpha is not None:
             alpha_t = self.alpha.to(logits.device)[targets]
             loss = alpha_t * focal_weight * ce

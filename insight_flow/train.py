@@ -64,17 +64,20 @@ def train_one_epoch(
         batch_vec = batch_data.batch
         news_input_ids = batch_data.news_input_ids
         news_attention_mask = batch_data.news_attention_mask
+        synth_input_ids = batch_data.synth_input_ids
+        synth_attention_mask = batch_data.synth_attention_mask
         labels = batch_data.y
 
-        # 修正 news tensor 维度:
-        # PyG batching 会把 [1, seq_len] 拼成 [batch_size, seq_len]
-        # 但如果是 [batch_size*1, seq_len]，需要确认
-        if news_input_ids.dim() == 2 and news_input_ids.shape[0] != labels.shape[0]:
-            # 如果 news 也被 PyG 当成节点维度拼接了，需要恢复
-            bs = labels.shape[0]
+        # 修正 news/synth tensor 维度 (PyG batching 兼容性处理)
+        bs = labels.shape[0]
+        if news_input_ids.dim() == 2 and news_input_ids.shape[0] != bs:
             seq_len = news_input_ids.shape[-1]
             news_input_ids = news_input_ids.view(bs, seq_len)
             news_attention_mask = news_attention_mask.view(bs, seq_len)
+        if synth_input_ids.dim() == 2 and synth_input_ids.shape[0] != bs:
+            seq_len = synth_input_ids.shape[-1]
+            synth_input_ids = synth_input_ids.view(bs, seq_len)
+            synth_attention_mask = synth_attention_mask.view(bs, seq_len)
 
         use_amp = scaler is not None
 
@@ -89,6 +92,8 @@ def train_one_epoch(
                     batch=batch_vec,
                     news_input_ids=news_input_ids,
                     news_attention_mask=news_attention_mask,
+                    synth_input_ids=synth_input_ids,
+                    synth_attention_mask=synth_attention_mask,
                 )
                 loss = criterion(logits, labels)
                 loss = loss / grad_accum_steps
@@ -101,6 +106,8 @@ def train_one_epoch(
                 batch=batch_vec,
                 news_input_ids=news_input_ids,
                 news_attention_mask=news_attention_mask,
+                synth_input_ids=synth_input_ids,
+                synth_attention_mask=synth_attention_mask,
             )
             loss = criterion(logits, labels)
             loss = loss / grad_accum_steps
@@ -173,14 +180,20 @@ def evaluate(
         batch_vec = batch_data.batch
         news_input_ids = batch_data.news_input_ids
         news_attention_mask = batch_data.news_attention_mask
+        synth_input_ids = batch_data.synth_input_ids
+        synth_attention_mask = batch_data.synth_attention_mask
         labels = batch_data.y
 
-        # 修正 news tensor 维度
-        if news_input_ids.dim() == 2 and news_input_ids.shape[0] != labels.shape[0]:
-            bs = labels.shape[0]
+        # 修正 news/synth tensor 维度
+        bs = labels.shape[0]
+        if news_input_ids.dim() == 2 and news_input_ids.shape[0] != bs:
             seq_len = news_input_ids.shape[-1]
             news_input_ids = news_input_ids.view(bs, seq_len)
             news_attention_mask = news_attention_mask.view(bs, seq_len)
+        if synth_input_ids.dim() == 2 and synth_input_ids.shape[0] != bs:
+            seq_len = synth_input_ids.shape[-1]
+            synth_input_ids = synth_input_ids.view(bs, seq_len)
+            synth_attention_mask = synth_attention_mask.view(bs, seq_len)
 
         with autocast(device_type=device.type, enabled=amp_enabled):
             logits = model(
@@ -191,6 +204,8 @@ def evaluate(
                 batch=batch_vec,
                 news_input_ids=news_input_ids,
                 news_attention_mask=news_attention_mask,
+                synth_input_ids=synth_input_ids,
+                synth_attention_mask=synth_attention_mask,
             )
             loss = criterion(logits, labels)
         total_loss += loss.item()

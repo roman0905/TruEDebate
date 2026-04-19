@@ -36,9 +36,9 @@ ROLE_IDS = {
 NUM_ROLES = len(ROLE_IDS)  # 7
 
 # ──────────────────────────────── 辩论图边索引 ────────────────────────────────
-# 有向边列表: (src, dst)
-# 论文图结构: 6 个辩论发言节点 (0-5) + 1 个 Synthesis 节点 (6)
-# 原始新闻不在图中，通过 Interactive Attention 与图表示交互 (Eq.10)
+# 【V4 重要修正】论文 Algorithm 1 第 18 行明确：图 V 只含辩论交互节点(6个)
+# Synthesis (S) 仅作为可解释性理由 R = {S, D}，不是图节点
+# Dataset 加载时会自动从 7 节点 JSON 中分离出 6 辩论节点 + Synthesis 独立字段
 EDGE_LIST = [
     # 时序边: Stage 1 → Stage 2
     (0, 2), (0, 3),  # Pro-Opening → Pro/Opp-Questioner
@@ -50,11 +50,12 @@ EDGE_LIST = [
     (0, 1), (1, 0),  # Pro-Opening ↔ Opp-Opening
     (2, 3), (3, 2),  # Pro-Questioner ↔ Opp-Questioner
     (4, 5), (5, 4),  # Pro-Closing ↔ Opp-Closing
-    # 综合边: 全部发言节点 → Synthesis
-    (0, 6), (1, 6),
-    (2, 6), (3, 6),
-    (4, 6), (5, 6),
-]
+    # 反向时序边 (增强: 双向时序消息传递，让后期发言影响前期理解)
+    (2, 0), (3, 0),  # Questioner → Opening
+    (2, 1), (3, 1),
+    (4, 2), (5, 2),  # Closing → Questioner
+    (4, 3), (5, 3),
+]  # 共 22 条边，仅在 6 个辩论节点之间
 
 # ──────────────────────────────── BERT 配置 ────────────────────────────────
 # 本地模型目录 (若已手动下载 BERT 模型，将路径改为本地绝对路径)
@@ -80,34 +81,36 @@ LABEL_MAP = {
 }
 
 # ──────────────────────────────── 模型超参数 ────────────────────────────────
+# 【V4 修正】回归稳定配置，避免过激的容量提升引入噪声
 ROLE_EMBED_DIM = 32
 ROLE_PROJ_DIM = BERT_HIDDEN_DIM  # 论文 Eq.6: Wrole ∈ R^(dh×dr)
-GAT_HIDDEN_DIM = 256  # 增加容量：128 → 256
+GAT_HIDDEN_DIM = 128  # 回退到论文原始值
 GAT_HEADS = 4
 GAT_LAYERS = 2
-GAT_DROPOUT = 0.2  # V3 网络更复杂，适度提升 dropout
-PROJ_DIM = 256
+GAT_DROPOUT = 0.2
+PROJ_DIM = 128  # 回退到论文原始值
 MHA_HEADS = 4
-CLASSIFIER_DROPOUT = 0.3  # V3 分类器更深，提高 dropout
+CLASSIFIER_DROPOUT = 0.2
 
 # ──────────────────────────────── 训练超参数 ────────────────────────────────
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-2
 EPOCHS = 30
-GRAD_ACCUM_STEPS = 4  # 有效 batch_size = BATCH_SIZE * GRAD_ACCUM_STEPS = 16
+GRAD_ACCUM_STEPS = 4  # 有效 batch_size = 16
 USE_AMP = True
 BERT_LR_FACTOR = 0.1
-WARMUP_RATIO = 0.1  # 10% 步数线性 warmup
+WARMUP_RATIO = 0.1
 MIN_LR_RATIO = 0.01
-EARLY_STOPPING_PATIENCE = 8
+EARLY_STOPPING_PATIENCE = 7
 LABEL_SMOOTHING = 0.1
 USE_CLASS_WEIGHT = True
 GRAD_CLIP_MAX_NORM = 1.0
 
-# 【V3 新增】Focal Loss 配置
-USE_FOCAL_LOSS = True   # 使用 Focal Loss 处理类别不平衡
-FOCAL_GAMMA = 2.0       # Focal Loss 聚焦参数 (gamma=0 退化为 CE)
+# 【V4 调整】默认关闭 Focal Loss（V3 实验显示 Focal 在此任务反而更差）
+# 使用 CrossEntropy + 平方根逆频率类别权重，更适合此数据规模
+USE_FOCAL_LOSS = False  # 改回 CE + class_weight (V3 实验显示 Focal 反而过拟合)
+FOCAL_GAMMA = 2.0       # Focal Loss 聚焦参数 (仅在 USE_FOCAL_LOSS=True 时生效)
 
 # ──────────────────────────────── 生成配置 ────────────────────────────────
 MAX_WORKERS = 4  # 多线程并发数
