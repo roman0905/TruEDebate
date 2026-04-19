@@ -1,6 +1,7 @@
 """
 TruEDebate (TED) — 训练循环、验证与评估
 包含梯度累积、混合精度训练、macF1/Acc/F1_real/F1_fake 评估指标。
+支持 Focal Loss 处理类别不平衡问题。
 """
 
 import logging
@@ -16,7 +17,7 @@ from torch_geometric.loader import DataLoader
 from sklearn.metrics import f1_score, accuracy_score
 
 import config
-from insight_flow.networks import TEDClassifier
+from insight_flow.networks import TEDClassifier, FocalLoss
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,10 @@ def _estimate_class_weights(dataset, device: torch.device) -> torch.Tensor | Non
     """
     从数据集 JSON 标签估计类别权重。
 
-    采用平方根逆频率权重，相比线性逆频率更温和，避免过度补偿少数类。
+    使用线性逆频率权重 (与 sklearn balanced 一致)：
+        weight_c = N / (num_classes * count_c)
+
+    适用于 Focal Loss 的 alpha 参数。
     """
     file_paths = getattr(dataset, "file_paths", None)
     if not file_paths:
@@ -243,11 +247,9 @@ def _estimate_class_weights(dataset, device: torch.device) -> torch.Tensor | Non
     if torch.any(class_counts == 0):
         return None
 
-    # 使用平方根逆频率：weight = sqrt(total / count) / sum(sqrt(total / count))
-    # 这比线性逆频率更温和，避免过度惩罚多数类
-    total = class_counts.sum()
-    sqrt_inv_freq = torch.sqrt(total / class_counts)
-    weights = sqrt_inv_freq / sqrt_inv_freq.sum() * 2.0  # 归一化到均值为 1
+    # 线性逆频率：sklearn balanced 风格
+    # 对 ARG-EN: real=2878, fake=1006 → real_w=0.6748, fake_w=1.9304
+    weights = class_counts.sum() / (2.0 * class_counts)
 
     return weights.to(device)
 
@@ -361,7 +363,21 @@ def train(
         else:
             logger.warning("类别权重启用失败，回退到无权重损失。")
 
-    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
+    # 【创新】使用 Focal Loss 处理类别不平衡
+    # gamma=2.0 是论文推荐值，可通过 config.FOCAL_GAMMA 调整
+    focal_gamma = getattr(config, "FOCAL_GAMMA", 2.0)
+    use_focal = getattr(config, "USE_FOCAL_LOSS", True)
+
+    if use_focal:
+        criterion = FocalLoss(
+            alpha=class_weights,
+            gamma=focal_gamma,
+            label_smoothing=label_smoothing,
+        )
+        logger.info(f"使用 Focal Loss: gamma={focal_gamma}, label_smoothing={label_smoothing}")
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
+        logger.info(f"使用 CrossEntropy Loss: label_smoothing={label_smoothing}")
 
     optimizer, bert_params, other_params = _build_optimizer(
         model=model,
