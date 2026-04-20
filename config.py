@@ -19,7 +19,7 @@ CHECKPOINT_DIR.mkdir(exist_ok=True)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")  # 第三方 API 地址，例如 "https://api.example.com/v1"
 OPENAI_MODEL = "gpt-4o-mini"
-OPENAI_MAX_TOKENS = 512
+OPENAI_MAX_TOKENS = 1024
 OPENAI_TEMPERATURE = 0.7
 
 # ──────────────────────────────── 辩论角色 ID 编码 ────────────────────────────

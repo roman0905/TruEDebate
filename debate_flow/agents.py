@@ -9,6 +9,7 @@ from mesa import Agent
 
 from debate_flow.prompts import (
     call_llm,
+    extract_rebuttal,
     format_opening_prompt,
     format_cross_exam_prompt,
     format_closing_prompt,
@@ -67,7 +68,11 @@ class DebateAgent(Agent):
         logger.info(f"[{self.side} Opening] 发言完成 ({len(self.speech)} chars)")
 
     def _do_cross_exam(self, news_text: str) -> None:
-        """Stage 2: 质询反驳"""
+        """Stage 2: 质询反驳 (Chain-of-Thought)
+
+        LLM 输出三段 [逻辑漏洞定位] -> [事实反证] -> [反驳发言]，
+        仅将 [反驳发言] 保存到 self.speech 作为 BERT 输入。
+        """
         # 需要 Stage 1 的发言作为上下文
         pro_opening = self.model.get_speech("proponent_opening")
         opp_opening = self.model.get_speech("opponent_opening")
@@ -75,9 +80,13 @@ class DebateAgent(Agent):
         system_msg, prompt = format_cross_exam_prompt(
             news_text, self.side, pro_opening, opp_opening
         )
-        logger.info(f"[{self.side} Questioner] 生成发言中...")
-        self.speech = call_llm(prompt, system_msg)
-        logger.info(f"[{self.side} Questioner] 发言完成 ({len(self.speech)} chars)")
+        logger.info(f"[{self.side} Questioner] 生成发言中 (CoT)...")
+        raw = call_llm(prompt, system_msg)
+        self.speech = extract_rebuttal(raw)
+        logger.info(
+            f"[{self.side} Questioner] 发言完成 "
+            f"(rebuttal={len(self.speech)} chars, raw={len(raw)} chars)"
+        )
 
     def _do_closing(self, news_text: str) -> None:
         """Stage 3: 结案陈词"""

@@ -4,6 +4,7 @@ TruEDebate (TED) — Prompt 模板与 LLM 调用工具
 """
 
 import os
+import re
 import logging
 from openai import OpenAI
 
@@ -120,13 +121,29 @@ Evaluate the authenticity of the following news article.
 You are the **Questioner** for the **{side}** side.
 Your stance: The news is **{stance_label}**.
 
-## Instructions
-1. Directly challenge the key arguments from the opposing side's opening statement.
-2. Point out logical flaws, unsupported claims, or missing evidence in their argument.
-3. Reinforce your own side's position with counter-arguments.
-4. Ask 1-2 pointed rhetorical questions that highlight weaknesses in the other side's case.
+## Chain-of-Thought Output Format (MANDATORY)
+Think step-by-step and structure your response in EXACTLY three sections. Each
+section MUST begin with the exact marker on its own line (including the square
+brackets and Chinese characters). Do not add any prose before the first marker.
 
-## Your Cross-Examination:
+[逻辑漏洞定位]
+Identify 2-3 specific logical flaws, unsupported assumptions, or internal
+contradictions in the opposing side's opening statement. For each flaw, briefly
+explain *why* it undermines their position.
+
+[事实反证]
+Provide 2-3 concrete counter-evidence points grounded in the news article
+itself — cite sources, tone, verifiable details, citation patterns, or
+emotional-language cues. Tie each item back to a weakness from the previous
+section.
+
+[反驳发言]
+Write a polished, persuasive 3-5 paragraph cross-examination speech directed
+at the opposing side. Leverage the analysis above, but write naturally — do
+NOT mention the earlier markers, brackets, or meta-analysis. End with 1-2
+pointed rhetorical questions that expose the opposing side's weakest point.
+
+## Output:
 """
 
 # ──────────────── Stage 3: Closing Statement (结案陈词) ────────────────
@@ -246,6 +263,36 @@ def format_cross_exam_prompt(
         opp_opening=opp_opening,
     )
     return system_msg, prompt
+
+
+_REBUTTAL_MARKER_RE = re.compile(r"\[\s*反驳发言\s*\]\s*(.*)", re.DOTALL)
+_NEXT_MARKER_RE = re.compile(r"\n\s*\[[^\]]{1,30}\]\s*\n")
+
+
+def extract_rebuttal(cot_output: str) -> str:
+    """从 CoT 输出中提取 [反驳发言] 段落（只将此部分喂给 BERT）。
+
+    期望的 LLM 输出结构:
+        [逻辑漏洞定位] ...
+        [事实反证] ...
+        [反驳发言] ...
+
+    - 定位最后一个 [反驳发言] 标记之后的文本。
+    - 若该文本后还出现其他方括号标记（LLM 偶尔会追加脚注），截断到下一个标记前。
+    - 标记缺失时回退到原始文本，避免数据生成失败。
+    """
+    match = _REBUTTAL_MARKER_RE.search(cot_output)
+    if match:
+        rebuttal = match.group(1)
+        tail = _NEXT_MARKER_RE.search(rebuttal)
+        if tail:
+            rebuttal = rebuttal[: tail.start()]
+        rebuttal = rebuttal.strip()
+        if rebuttal:
+            return rebuttal
+
+    logger.warning("CoT 解析未能定位 [反驳发言]，回退到原始输出。")
+    return cot_output.strip()
 
 
 def format_closing_prompt(
