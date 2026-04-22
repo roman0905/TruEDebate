@@ -1,17 +1,21 @@
 """
-TruEDebate (TED) — 阶段 1: 离线辩论生成
-使用多线程并发调用 OpenAI API，为每条新闻生成完整的辩论记录并保存为 JSON。
-支持断点续跑（已存在的 JSON 文件会被跳过）。
+TruEDebate (TED) - Stage 1 offline debate generation.
 
-用法:
-    python main_generate.py --dataset en --split train --max_workers 4
-    python main_generate.py --dataset zh --split val --max_workers 2 --max_samples 10
+This script generates one complete debate record per news sample and saves it
+as JSON. It is designed to be resilient to transient API failures and partial
+outputs by using:
+1. Per-sample retries with backoff.
+2. Validation of both existing and newly generated JSON files.
+3. Atomic writes through temporary files.
+4. A final serial rescue pass for failed samples.
+5. A failure manifest for any samples that still fail.
 """
 
 import argparse
 import json
 import logging
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -20,7 +24,6 @@ from tqdm import tqdm
 import config
 from debate_flow.model import DebateModel
 
-# ──────────────────────────────── 日志配置 ────────────────────────────────
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,26 +36,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────── 数据加载 ────────────────────────────────
+EXPECTED_NODE_COUNT = 7
+EXPECTED_EDGE_COUNT = 22
+REQUIRED_KEYS = {
+    "id",
+    "news_text",
+    "label",
+    "dataset",
+    "split",
+    "nodes",
+    "edge_index",
+    "synthesis",
+}
+
 
 def load_dataset(dataset: str, split: str) -> list[dict]:
-    """
-    加载原始新闻数据集。
-
-    实际数据格式:
-    - 路径: data/{en,zh}/{train,val,test}.json
-    - 字段: {"content": "...", "label": 0/1 或 "real"/"fake", ...}
-
-    Args:
-        dataset: "en" 或 "zh"
-        split: "train", "val", 或 "test"
-
-    Returns:
-        数据列表 [{"text": ..., "label": ..., "id": ...}, ...]
-    """
+    """Load the source news dataset."""
     data_dir = config.DATA_DIR
-
-    # 数据集实际存储在子目录中: data/en/train.json, data/zh/val.json 等
     possible_paths = [
         data_dir / dataset / f"{split}.json",
         data_dir / dataset / f"{split}.jsonl",
@@ -68,14 +68,13 @@ def load_dataset(dataset: str, split: str) -> list[dict]:
 
     if file_path is None:
         raise FileNotFoundError(
-            f"在 {data_dir} 中找不到数据集文件。\n"
-            f"尝试过的路径: {[str(p) for p in possible_paths]}\n"
-            f"请确保数据文件存在于 data/{dataset}/ 目录下。"
+            f"Could not find dataset file in {data_dir}. "
+            f"Tried: {[str(p) for p in possible_paths]}"
         )
 
-    logger.info(f"加载数据集: {file_path}")
+    logger.info("Loading dataset from %s", file_path)
 
-    records = []
+    records: list[dict] = []
     if file_path.suffix == ".jsonl":
         with open(file_path, "r", encoding="utf-8") as f:
             for i, line in enumerate(f):
@@ -88,145 +87,244 @@ def load_dataset(dataset: str, split: str) -> list[dict]:
     else:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, list):
-            for i, item in enumerate(data):
-                item.setdefault("id", i)
-                records.append(item)
-        else:
-            raise ValueError(f"JSON 文件格式异常: 期望 list，得到 {type(data)}")
+        if not isinstance(data, list):
+            raise ValueError(
+                f"Dataset JSON must be a list, got {type(data)} from {file_path}"
+            )
+        for i, item in enumerate(data):
+            item.setdefault("id", i)
+            records.append(item)
 
-    # 标准化字段: 将 "content" 映射为 "text"，标签映射为整数
     for item in records:
-        # 文本字段: 数据集使用 "content"，统一为 "text"
         if "text" not in item and "content" in item:
             item["text"] = item["content"]
-        # 标签字段: 将字符串标签映射为整数
         if "label" in item:
             item["label"] = config.LABEL_MAP.get(item["label"], item["label"])
 
-    logger.info(f"加载完成: {len(records)} 条记录")
+    logger.info("Loaded %s records", len(records))
     return records
 
 
-# ──────────────────────────────── 单条处理 ────────────────────────────────
+def _output_file_for(
+    item_id: int, output_dir: Path, dataset: str, split: str
+) -> Path:
+    return output_dir / f"{dataset}_{split}_{item_id:06d}.json"
+
+
+def _temp_file_for(output_file: Path) -> Path:
+    return output_file.with_suffix(f"{output_file.suffix}.tmp")
+
+
+def _text_looks_incomplete(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if stripped[-1] not in '.!?"\')]}':
+        return True
+    return False
+
+
+def _validate_output_record(record: dict, item: dict, dataset: str, split: str) -> str | None:
+    missing_keys = REQUIRED_KEYS - set(record.keys())
+    if missing_keys:
+        return f"missing_keys={sorted(missing_keys)}"
+
+    if record["id"] != item["id"]:
+        return f"id_mismatch={record['id']}!={item['id']}"
+    if record["dataset"] != dataset:
+        return f"dataset_mismatch={record['dataset']}!={dataset}"
+    if record["split"] != split:
+        return f"split_mismatch={record['split']}!={split}"
+
+    nodes = record["nodes"]
+    if not isinstance(nodes, list) or len(nodes) != EXPECTED_NODE_COUNT:
+        return f"bad_nodes={type(nodes)}:{len(nodes) if isinstance(nodes, list) else 'na'}"
+
+    expected_role_ids = list(range(EXPECTED_NODE_COUNT))
+    role_ids = [node.get("role_id") for node in nodes]
+    if role_ids != expected_role_ids:
+        return f"bad_role_ids={role_ids}"
+
+    for node in nodes:
+        text = node.get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            return f"empty_text={node.get('role_name')}"
+        if _text_looks_incomplete(text):
+            return f"incomplete_text={node.get('role_name')}"
+
+    edge_index = record["edge_index"]
+    if (
+        not isinstance(edge_index, list)
+        or len(edge_index) != 2
+        or not all(isinstance(x, list) for x in edge_index)
+        or len(edge_index[0]) != EXPECTED_EDGE_COUNT
+        or len(edge_index[1]) != EXPECTED_EDGE_COUNT
+    ):
+        return "bad_edge_index"
+
+    synthesis = record.get("synthesis", "")
+    if not isinstance(synthesis, str) or not synthesis.strip():
+        return "empty_synthesis"
+    if _text_looks_incomplete(synthesis):
+        return "incomplete_synthesis"
+
+    return None
+
+
+def _load_existing_output(output_file: Path) -> dict | None:
+    try:
+        with open(output_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning("Failed to read existing output %s: %s", output_file.name, e)
+        return None
+
+
+def _cleanup_invalid_output(output_file: Path) -> None:
+    temp_file = _temp_file_for(output_file)
+    for path in (output_file, temp_file):
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError as e:
+                logger.warning("Failed to remove invalid file %s: %s", path, e)
+
+
+def _write_output_atomic(output: dict, output_file: Path) -> None:
+    temp_file = _temp_file_for(output_file)
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+    temp_file.replace(output_file)
+
+
+def _build_output(item: dict, dataset: str, split: str, debate_record: dict) -> dict:
+    return {
+        "id": item["id"],
+        "news_text": item["text"],
+        "label": item["label"],
+        "dataset": dataset,
+        "split": split,
+        "nodes": debate_record["nodes"],
+        "edge_index": debate_record["edge_index"],
+        "synthesis": debate_record["synthesis"],
+    }
+
+
+def _generate_one_record(item: dict, dataset: str, split: str) -> dict:
+    debate_model = DebateModel(item["text"])
+    debate_model.step()
+    debate_record = debate_model.get_debate_record()
+    return _build_output(item, dataset, split, debate_record)
+
 
 def process_single_news(
     item: dict,
     output_dir: Path,
     dataset: str,
     split: str,
-) -> str:
-    """
-    为一条新闻生成完整的辩论记录。
-
-    Args:
-        item: {"text": ..., "label": ..., "id": ...}
-        output_dir: 输出目录
-        dataset: 数据集标识
-        split: 数据集划分
-
-    Returns:
-        输出文件路径
-    """
+    item_retries: int,
+    retry_backoff_s: float,
+) -> dict:
+    """Generate one sample with validation, retries, and atomic writes."""
     item_id = item["id"]
-    news_text = item["text"]
-    label = item["label"]
+    output_file = _output_file_for(item_id, output_dir, dataset, split)
 
-    # 输出文件路径
-    output_file = output_dir / f"{dataset}_{split}_{item_id:06d}.json"
-
-    # 断点续跑：如果文件已存在，跳过
     if output_file.exists():
-        return f"SKIP: {output_file.name}"
+        existing = _load_existing_output(output_file)
+        if existing is not None:
+            validation_error = _validate_output_record(existing, item, dataset, split)
+            if validation_error is None:
+                return {
+                    "status": "SKIP",
+                    "item_id": item_id,
+                    "file": output_file.name,
+                    "attempts": 0,
+                }
+            logger.warning(
+                "Existing output %s is invalid (%s); regenerating",
+                output_file.name,
+                validation_error,
+            )
+        _cleanup_invalid_output(output_file)
 
-    try:
-        # 运行三阶段辩论 + Synthesis
-        debate_model = DebateModel(news_text)
-        debate_model.step()
+    last_error = "unknown"
+    for attempt in range(1, item_retries + 1):
+        try:
+            output = _generate_one_record(item, dataset, split)
+            validation_error = _validate_output_record(output, item, dataset, split)
+            if validation_error is not None:
+                raise ValueError(f"generated_invalid_output: {validation_error}")
 
-        # 导出辩论记录
-        debate_record = debate_model.get_debate_record()
+            _write_output_atomic(output, output_file)
+            logger.info(
+                "Generated sample id=%s file=%s on attempt=%s",
+                item_id,
+                output_file.name,
+                attempt,
+            )
+            return {
+                "status": "OK",
+                "item_id": item_id,
+                "file": output_file.name,
+                "attempts": attempt,
+            }
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(
+                "Generation failed for id=%s attempt=%s/%s: %s",
+                item_id,
+                attempt,
+                item_retries,
+                e,
+            )
+            _cleanup_invalid_output(output_file)
+            if attempt < item_retries:
+                time.sleep(retry_backoff_s * attempt)
 
-        # 组装完整输出
-        output = {
-            "id": item_id,
-            "news_text": news_text,
-            "label": label,
-            "dataset": dataset,
-            "split": split,
-            "nodes": debate_record["nodes"],
-            "edge_index": debate_record["edge_index"],
-            "synthesis": debate_record["synthesis"],
-        }
-
-        # 保存为 JSON
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(output, f, ensure_ascii=False, indent=2)
-
-        return f"OK: {output_file.name}"
-
-    except Exception as e:
-        logger.error(f"处理失败 (id={item_id}): {e}")
-        return f"ERROR: {item_id} - {str(e)}"
+    logger.error("Generation failed permanently for id=%s: %s", item_id, last_error)
+    return {
+        "status": "ERROR",
+        "item_id": item_id,
+        "file": output_file.name,
+        "attempts": item_retries,
+        "error": last_error,
+    }
 
 
-# ──────────────────────────────── 主函数 ────────────────────────────────
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="TruEDebate — 阶段 1: 多线程辩论生成"
-    )
-    parser.add_argument(
-        "--dataset", type=str, default="en", choices=["en", "zh"],
-        help="数据集语言 (en=ARG-EN, zh=ARG-CN)"
-    )
-    parser.add_argument(
-        "--split", type=str, default="train", choices=["train", "val", "test"],
-        help="数据集划分"
-    )
-    parser.add_argument(
-        "--max_workers", type=int, default=config.MAX_WORKERS,
-        help="最大并发线程数"
-    )
-    parser.add_argument(
-        "--max_samples", type=int, default=None,
-        help="最多处理的样本数 (用于调试，默认全部处理)"
-    )
-    args = parser.parse_args()
-
-    # 创建输出目录
-    output_dir = config.OUTPUT_DIR / f"{args.dataset}_{args.split}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # 加载数据集
-    records = load_dataset(args.dataset, args.split)
-
-    # 截取样本数
-    if args.max_samples is not None:
-        records = records[: args.max_samples]
-        logger.info(f"截取前 {args.max_samples} 条样本")
-
-    logger.info(
-        f"开始生成辩论记录: dataset={args.dataset}, split={args.split}, "
-        f"samples={len(records)}, workers={args.max_workers}"
-    )
-
-    # 多线程并发处理
+def _run_generation_pass(
+    records: list[dict],
+    output_dir: Path,
+    dataset: str,
+    split: str,
+    max_workers: int,
+    item_retries: int,
+    retry_backoff_s: float,
+    desc: str,
+) -> tuple[dict, list[dict]]:
     results = {"OK": 0, "SKIP": 0, "ERROR": 0}
+    failures: list[dict] = []
 
-    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                process_single_news, item, output_dir, args.dataset, args.split
+                process_single_news,
+                item,
+                output_dir,
+                dataset,
+                split,
+                item_retries,
+                retry_backoff_s,
             ): item["id"]
             for item in records
         }
 
-        with tqdm(total=len(futures), desc="Generating debates") as pbar:
+        with tqdm(total=len(futures), desc=desc) as pbar:
             for future in as_completed(futures):
                 result = future.result()
-                status = result.split(":")[0]
+                status = result["status"]
                 results[status] = results.get(status, 0) + 1
+                if status == "ERROR":
+                    failures.append(result)
                 pbar.set_postfix(
                     ok=results["OK"],
                     skip=results["SKIP"],
@@ -234,13 +332,180 @@ def main():
                 )
                 pbar.update(1)
 
-    # 统计结果
+    return results, failures
+
+
+def _cleanup_temp_files(output_dir: Path) -> int:
+    removed = 0
+    for temp_file in output_dir.glob("*.json.tmp"):
+        try:
+            temp_file.unlink()
+            removed += 1
+        except OSError as e:
+            logger.warning("Failed to remove temp file %s: %s", temp_file, e)
+    return removed
+
+
+def _write_failure_manifest(
+    output_dir: Path,
+    dataset: str,
+    split: str,
+    failures: list[dict],
+) -> Path | None:
+    if not failures:
+        return None
+
+    config.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    manifest_path = (
+        config.CHECKPOINT_DIR / f"generate_failures_{dataset}_{split}.jsonl"
+    )
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        for row in failures:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return manifest_path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="TruEDebate - Stage 1 multi-threaded debate generation"
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="en",
+        choices=["en", "zh"],
+        help="Dataset language",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="train",
+        choices=["train", "val", "test"],
+        help="Dataset split",
+    )
+    parser.add_argument(
+        "--max_workers",
+        type=int,
+        default=config.MAX_WORKERS,
+        help="Maximum worker threads",
+    )
+    parser.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Optional sample cap for debugging",
+    )
+    parser.add_argument(
+        "--item_retries",
+        type=int,
+        default=4,
+        help="Retry count per sample before marking it failed",
+    )
+    parser.add_argument(
+        "--retry_backoff_s",
+        type=float,
+        default=2.0,
+        help="Base backoff seconds between per-sample retries",
+    )
+    parser.add_argument(
+        "--final_retry_rounds",
+        type=int,
+        default=1,
+        help="Additional serial rescue rounds for failed samples",
+    )
+    args = parser.parse_args()
+
+    output_dir = config.OUTPUT_DIR / f"{args.dataset}_{args.split}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    removed_temp_files = _cleanup_temp_files(output_dir)
+    if removed_temp_files:
+        logger.info("Removed %s stale temp files from %s", removed_temp_files, output_dir)
+
+    records = load_dataset(args.dataset, args.split)
+    if args.max_samples is not None:
+        records = records[: args.max_samples]
+        logger.info("Truncated to %s samples", args.max_samples)
+
+    logger.info(
+        "Starting generation: dataset=%s split=%s samples=%s workers=%s "
+        "item_retries=%s final_retry_rounds=%s",
+        args.dataset,
+        args.split,
+        len(records),
+        args.max_workers,
+        args.item_retries,
+        args.final_retry_rounds,
+    )
+
+    all_results = {"OK": 0, "SKIP": 0, "ERROR": 0}
+    first_pass_results, first_pass_failures = _run_generation_pass(
+        records=records,
+        output_dir=output_dir,
+        dataset=args.dataset,
+        split=args.split,
+        max_workers=args.max_workers,
+        item_retries=args.item_retries,
+        retry_backoff_s=args.retry_backoff_s,
+        desc="Generating debates",
+    )
+    for key, value in first_pass_results.items():
+        all_results[key] = all_results.get(key, 0) + value
+
+    failed_ids = {row["item_id"] for row in first_pass_failures}
+    failed_records = [item for item in records if item["id"] in failed_ids]
+
+    for round_idx in range(1, args.final_retry_rounds + 1):
+        if not failed_records:
+            break
+        logger.info(
+            "Starting final rescue round %s for %s failed samples",
+            round_idx,
+            len(failed_records),
+        )
+        round_results, round_failures = _run_generation_pass(
+            records=failed_records,
+            output_dir=output_dir,
+            dataset=args.dataset,
+            split=args.split,
+            max_workers=1,
+            item_retries=args.item_retries,
+            retry_backoff_s=args.retry_backoff_s,
+            desc=f"Rescue round {round_idx}",
+        )
+        for key, value in round_results.items():
+            if key != "SKIP":
+                all_results[key] = all_results.get(key, 0) + value
+        failed_ids = {row["item_id"] for row in round_failures}
+        failed_records = [item for item in failed_records if item["id"] in failed_ids]
+
+    final_failures = []
+    for item in failed_records:
+        output_file = _output_file_for(item["id"], output_dir, args.dataset, args.split)
+        final_failures.append(
+            {
+                "status": "ERROR",
+                "item_id": item["id"],
+                "file": output_file.name,
+                "error": "failed_after_all_retries",
+            }
+        )
+
+    manifest_path = _write_failure_manifest(
+        output_dir=output_dir,
+        dataset=args.dataset,
+        split=args.split,
+        failures=final_failures,
+    )
+
     logger.info("=" * 60)
-    logger.info("生成完成统计:")
-    logger.info(f"  成功: {results['OK']}")
-    logger.info(f"  跳过: {results['SKIP']}")
-    logger.info(f"  失败: {results['ERROR']}")
-    logger.info(f"  输出目录: {output_dir}")
+    logger.info("Generation summary:")
+    logger.info("  OK: %s", all_results["OK"])
+    logger.info("  SKIP: %s", all_results["SKIP"])
+    logger.info("  ERROR: %s", len(final_failures))
+    logger.info("  Output dir: %s", output_dir)
+    if manifest_path is not None:
+        logger.info("  Failure manifest: %s", manifest_path)
     logger.info("=" * 60)
 
 

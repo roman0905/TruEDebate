@@ -111,7 +111,9 @@ class DebateModel(Model):
             pro_closing=self.get_speech("proponent_closing"),
             opp_closing=self.get_speech("opponent_closing"),
         )
-        self.synthesis_text = call_llm(prompt, system_msg)
+        self.synthesis_text = call_llm(
+            prompt, system_msg, generation_key="synthesis"
+        )
         logger.info(f"[Synthesis] 总结完成 ({len(self.synthesis_text)} chars)")
 
     def get_debate_record(self) -> dict:

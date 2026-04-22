@@ -64,7 +64,7 @@ class DebateAgent(Agent):
         """Stage 1: 开篇立论"""
         system_msg, prompt = format_opening_prompt(news_text, self.side)
         logger.info(f"[{self.side} Opening] 生成发言中...")
-        self.speech = call_llm(prompt, system_msg)
+        self.speech = call_llm(prompt, system_msg, generation_key="opening")
         logger.info(f"[{self.side} Opening] 发言完成 ({len(self.speech)} chars)")
 
     def _do_cross_exam(self, news_text: str) -> None:
@@ -81,7 +81,7 @@ class DebateAgent(Agent):
             news_text, self.side, pro_opening, opp_opening
         )
         logger.info(f"[{self.side} Questioner] 生成发言中 (CoT)...")
-        raw = call_llm(prompt, system_msg)
+        raw = call_llm(prompt, system_msg, generation_key="questioner")
         self.speech = extract_rebuttal(raw)
         logger.info(
             f"[{self.side} Questioner] 发言完成 "
@@ -99,7 +99,7 @@ class DebateAgent(Agent):
             news_text, self.side, pro_opening, opp_opening, pro_cross, opp_cross
         )
         logger.info(f"[{self.side} Closing] 生成发言中...")
-        self.speech = call_llm(prompt, system_msg)
+        self.speech = call_llm(prompt, system_msg, generation_key="closing")
         logger.info(f"[{self.side} Closing] 发言完成 ({len(self.speech)} chars)")
 
     def __repr__(self) -> str:

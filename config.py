@@ -21,6 +21,19 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")  # 第三方 API 地址，例
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_MAX_TOKENS = 1024
 OPENAI_TEMPERATURE = 0.7
+OPENAI_STAGE_MAX_TOKENS = {
+    "opening": 512,
+    "questioner": 896,
+    "closing": 640,
+    "synthesis": 896,
+}
+OPENAI_STAGE_RETRY_MAX_TOKENS = {
+    "opening": 640,
+    "questioner": 1152,
+    "closing": 768,
+    "synthesis": 1280,
+}
+OPENAI_MAX_RETRIES_ON_LENGTH = 2
 
 # ──────────────────────────────── 辩论角色 ID 编码 ────────────────────────────
 # 论文中原始新闻不作为图节点，而是通过独立 Encoder(F) 编码后与图表示做 Interactive Attention
