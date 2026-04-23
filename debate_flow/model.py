@@ -22,13 +22,15 @@ class DebateModel(Model):
     输入一篇新闻文本，输出完整的辩论记录（含图结构信息）。
     """
 
-    def __init__(self, news_text: str):
+    def __init__(self, news_text: str, lang: str = "en"):
         """
         Args:
             news_text: 待辩论的原始新闻文本
+            lang: 数据集语言，用于选择提示词模板
         """
         super().__init__()
         self.news_text = news_text
+        self.lang = lang
         self.synthesis_text: str = ""
 
         # 存储各角色到 Agent 的映射，便于按角色名检索发言
@@ -110,6 +112,7 @@ class DebateModel(Model):
             opp_cross=self.get_speech("opponent_questioner"),
             pro_closing=self.get_speech("proponent_closing"),
             opp_closing=self.get_speech("opponent_closing"),
+            lang=self.lang,
         )
         self.synthesis_text = call_llm(
             prompt, system_msg, generation_key="synthesis"

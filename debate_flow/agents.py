@@ -62,7 +62,9 @@ class DebateAgent(Agent):
 
     def _do_opening(self, news_text: str) -> None:
         """Stage 1: 开篇立论"""
-        system_msg, prompt = format_opening_prompt(news_text, self.side)
+        system_msg, prompt = format_opening_prompt(
+            news_text, self.side, lang=getattr(self.model, "lang", "en")
+        )
         logger.info(f"[{self.side} Opening] 生成发言中...")
         self.speech = call_llm(prompt, system_msg, generation_key="opening")
         logger.info(f"[{self.side} Opening] 发言完成 ({len(self.speech)} chars)")
@@ -78,7 +80,11 @@ class DebateAgent(Agent):
         opp_opening = self.model.get_speech("opponent_opening")
 
         system_msg, prompt = format_cross_exam_prompt(
-            news_text, self.side, pro_opening, opp_opening
+            news_text,
+            self.side,
+            pro_opening,
+            opp_opening,
+            lang=getattr(self.model, "lang", "en"),
         )
         logger.info(f"[{self.side} Questioner] 生成发言中 (CoT)...")
         raw = call_llm(prompt, system_msg, generation_key="questioner")
@@ -96,7 +102,13 @@ class DebateAgent(Agent):
         opp_cross = self.model.get_speech("opponent_questioner")
 
         system_msg, prompt = format_closing_prompt(
-            news_text, self.side, pro_opening, opp_opening, pro_cross, opp_cross
+            news_text,
+            self.side,
+            pro_opening,
+            opp_opening,
+            pro_cross,
+            opp_cross,
+            lang=getattr(self.model, "lang", "en"),
         )
         logger.info(f"[{self.side} Closing] 生成发言中...")
         self.speech = call_llm(prompt, system_msg, generation_key="closing")

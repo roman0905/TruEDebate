@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_NODE_COUNT = 7
 EXPECTED_EDGE_COUNT = 22
+COMPLETE_END_CHARS = '.!?"\')]}。！？；：”’）】》'
 REQUIRED_KEYS = {
     "id",
     "news_text",
@@ -119,7 +120,7 @@ def _text_looks_incomplete(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
         return True
-    if stripped[-1] not in '.!?"\')]}':
+    if stripped[-1] not in COMPLETE_END_CHARS:
         return True
     return False
 
@@ -211,7 +212,7 @@ def _build_output(item: dict, dataset: str, split: str, debate_record: dict) -> 
 
 
 def _generate_one_record(item: dict, dataset: str, split: str) -> dict:
-    debate_model = DebateModel(item["text"])
+    debate_model = DebateModel(item["text"], lang=dataset)
     debate_model.step()
     debate_record = debate_model.get_debate_record()
     return _build_output(item, dataset, split, debate_record)

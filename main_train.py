@@ -60,6 +60,14 @@ def main():
         help="权重衰减"
     )
     parser.add_argument(
+        "--label_smoothing", type=float, default=config.LABEL_SMOOTHING,
+        help="交叉熵标签平滑系数"
+    )
+    parser.add_argument(
+        "--early_stopping_patience", type=int, default=config.EARLY_STOPPING_PATIENCE,
+        help="早停耐心轮数"
+    )
+    parser.add_argument(
         "--device", type=str, default=None,
         help="训练设备 (cuda / cpu，默认自动检测)"
     )
@@ -167,6 +175,8 @@ def main():
     logger.info(f"  Effective BS: {args.batch_size * args.grad_accum}")
     logger.info(f"  Learning Rate: {args.lr}")
     logger.info(f"  Weight Decay: {args.weight_decay}")
+    logger.info(f"  Label Smoothing: {args.label_smoothing}")
+    logger.info(f"  Early Stop Patience: {args.early_stopping_patience}")
     logger.info(f"  AMP:         {not args.no_amp}")
     logger.info(f"  BERT Freeze: {args.freeze_layers} layers")
     logger.info(f"  Num Workers: {args.num_workers}")
@@ -185,6 +195,8 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay,
         use_amp=not args.no_amp,
+        early_stopping_patience=args.early_stopping_patience,
+        label_smoothing=args.label_smoothing,
     )
 
     # ── 输出最终结果 ──

@@ -217,3 +217,14 @@ output/
 # 忽略具体的论文和生成的文本文件
 *.pdf
 _paper_text.txt
+
+# 实验模型权重与检查点
+checkpoints/
+models/
+
+# 辅助工具与本地说明
+.codex
+AGENTS.md
+
+# 本地测试脚本
+scripts/
