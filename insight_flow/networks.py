@@ -1,25 +1,13 @@
 """
-TruEDebate (TED) — Analysis Agent 网络架构 V4 (Synthesis-as-Auxiliary-Query)
+R-TED — Analysis Agent 网络
 
-【V4 核心修正】根据论文 Algorithm 1 重新设计图结构与 Synthesis 的使用方式：
-
-1. 【图结构修正】图 V 只含 6 个辩论节点（论文原意），不包含 Synthesis
-2. 【Synthesis 作为辅助 Query】不作为图节点，而是：
-   - 独立 BERT 编码得到 e_synth
-   - 作为第二个 Query 对辩论图做 Cross-Attention: c_synth = MHA(e_synth, node_dense, node_dense)
-   - 与 News Query 的交互表示 c_news 并列融合
-   - 体现"Synthesis bridges the debate discourse and analytical processes" (论文原话)
-
-3. 【保留双分支立场池化】显式建模 Pro vs Opp 的对抗
-4. 【修复 MHA 退化】News 和 Synthesis 都对节点级表征做真正的交互注意力
-
-最终分类器输入：[g_global; c_news; c_synth; divergence]
+使用关系感知图卷积近似异构论证图推理，并加入独立 news/meta 分支。
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GATv2Conv
+from torch_geometric.nn import RGCNConv
 from torch_geometric.utils import to_dense_batch
 from transformers import AutoModel
 
@@ -27,32 +15,27 @@ import config
 
 
 class TEDClassifier(nn.Module):
-    """
-    TruEDebate Analysis Agent V4。
+    """R-TED classifier."""
 
-    输入:
-        - node_input_ids: [6 辩论节点]  (不含 Synthesis)
-        - news_input_ids: [新闻]
-        - synth_input_ids: [Synthesis 辅助文本]
-
-    输出: [batch_size, 2] 二分类 logits
-    """
-
-    PRO_ROLE_IDS = [0, 2, 4]
-    OPP_ROLE_IDS = [1, 3, 5]
+    NODE_TYPE_IDS = {
+        "claim": 0,
+        "td_rationale": 1,
+        "cs_rationale": 2,
+        "argument": 3,
+        "synthesis": 4,
+        "evidence": 5,
+    }
+    PRO_SPEAKER_ROLE_IDS = {1, 3, 5}
+    OPP_SPEAKER_ROLE_IDS = {2, 4, 6}
 
     def __init__(
         self,
         lang: str = "en",
-        num_roles: int = config.NUM_ROLES,
-        role_embed_dim: int = config.ROLE_EMBED_DIM,
-        role_proj_dim: int = config.ROLE_PROJ_DIM,
-        gat_hidden_dim: int = config.GAT_HIDDEN_DIM,
-        gat_heads: int = config.GAT_HEADS,
-        gat_layers: int = config.GAT_LAYERS,
-        gat_dropout: float = config.GAT_DROPOUT,
+        node_type_embed_dim: int = config.ROLE_EMBED_DIM,
+        speaker_role_embed_dim: int = config.ROLE_EMBED_DIM,
+        rgcn_hidden_dim: int = config.GAT_HIDDEN_DIM,
+        rgcn_layers: int = config.GAT_LAYERS,
         proj_dim: int = config.PROJ_DIM,
-        mha_heads: int = config.MHA_HEADS,
         classifier_dropout: float = config.CLASSIFIER_DROPOUT,
         freeze_layers: int = config.BERT_FREEZE_LAYERS,
     ):
@@ -61,93 +44,100 @@ class TEDClassifier(nn.Module):
         self.lang = lang
         bert_name = config.BERT_MODELS.get(lang, config.BERT_MODELS["en"])
         bert_hidden = config.BERT_HIDDEN_DIM
-
         bert_path = self._resolve_bert_path(bert_name)
 
-        # ═══════ Sub-module 1: Role-aware Encoder (BERT + Role Embedding) ═══════
-
-        # BERT 在辩论节点、新闻、Synthesis 间共享 (参数效率 + 语义一致性)
         self.bert = AutoModel.from_pretrained(bert_path)
         self._freeze_bert_layers(freeze_layers)
 
-        self.role_embedding = nn.Embedding(num_roles, role_embed_dim)
-        self.role_proj = nn.Linear(role_embed_dim, role_proj_dim, bias=False)
+        self.node_type_embedding = nn.Embedding(len(self.NODE_TYPE_IDS), node_type_embed_dim)
+        self.speaker_role_embedding = nn.Embedding(len(config.ROLE_IDS) + 1, speaker_role_embed_dim)
+        node_input_dim = bert_hidden + node_type_embed_dim + speaker_role_embed_dim
+        self.input_proj = nn.Linear(node_input_dim, rgcn_hidden_dim)
+        self.input_norm = nn.LayerNorm(rgcn_hidden_dim)
 
-        node_dim = bert_hidden + role_proj_dim
-
-        # ═══════ Sub-module 2: Debate Graph GAT (仅 6 辩论节点) ═══════
-
-        self.gat_layers = nn.ModuleList()
-        self.gat_norms = nn.ModuleList()
-
-        # 第一层: node_dim → gat_hidden_dim (multi-head concat)
-        self.gat_layers.append(
-            GATv2Conv(
-                in_channels=node_dim,
-                out_channels=gat_hidden_dim,
-                heads=gat_heads,
-                concat=True,
-                dropout=gat_dropout,
-                add_self_loops=True,
+        self.rgcn_layers = nn.ModuleList()
+        self.rgcn_norms = nn.ModuleList()
+        for _ in range(max(rgcn_layers, 2)):
+            self.rgcn_layers.append(
+                RGCNConv(
+                    rgcn_hidden_dim,
+                    rgcn_hidden_dim,
+                    num_relations=config.EVITED_NUM_EDGE_TYPES,
+                )
             )
+            self.rgcn_norms.append(nn.LayerNorm(rgcn_hidden_dim))
+
+        self.dropout = nn.Dropout(config.GAT_DROPOUT)
+        self.activation = nn.GELU()
+        self.node_proj = nn.Linear(rgcn_hidden_dim, proj_dim)
+        self.news_proj = nn.Sequential(
+            nn.Linear(bert_hidden, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
         )
-        self.gat_norms.append(nn.LayerNorm(gat_hidden_dim * gat_heads))
-
-        # 第二层: gat_hidden_dim*heads → gat_hidden_dim (multi-head average)
-        self.gat_layers.append(
-            GATv2Conv(
-                in_channels=gat_hidden_dim * gat_heads,
-                out_channels=gat_hidden_dim,
-                heads=gat_heads,
-                concat=False,
-                dropout=gat_dropout,
-                add_self_loops=True,
-            )
+        self.source_embedding = nn.Embedding(config.SOURCE_EMBED_BUCKETS, proj_dim // 2)
+        self.source_encoder = nn.Sequential(
+            nn.Linear(proj_dim // 2, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
         )
-        self.gat_norms.append(nn.LayerNorm(gat_hidden_dim))
-
-        self.gat_activation = nn.ELU()
-        self.gat_dropout = nn.Dropout(gat_dropout)
-
-        # GAT 第一层残差连接 (维度对齐)
-        self.gat_input_proj = nn.Linear(
-            node_dim, gat_hidden_dim * gat_heads, bias=False
+        self.time_encoder = nn.Sequential(
+            nn.Linear(config.TIME_FEATURE_DIM, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
         )
-
-        # ═══════ Sub-module 3: 投影层 (节点/新闻/Synthesis → proj_dim) ═══════
-
-        self.node_proj = nn.Linear(gat_hidden_dim, proj_dim)
-        self.news_proj = nn.Linear(bert_hidden, proj_dim)
-        self.synth_proj = nn.Linear(bert_hidden, proj_dim)
-
-        # ═══════ Sub-module 4: 双路 Cross-Attention ═══════
-
-        # 【关键】News Cross-Attention: News 作为 Query，辩论节点作为 K/V
-        self.news_cross_attn = nn.MultiheadAttention(
+        self.meta_fusion = nn.Sequential(
+            nn.Linear(proj_dim * 2, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
+        )
+        self.teacher_encoder = nn.Sequential(
+            nn.Linear(config.TEACHER_FEATURE_DIM, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
+        )
+        self.evidence_interactive_attn = nn.MultiheadAttention(
             embed_dim=proj_dim,
-            num_heads=mha_heads,
-            dropout=gat_dropout,
+            num_heads=config.MHA_HEADS,
+            dropout=classifier_dropout,
             batch_first=True,
         )
-        self.news_attn_norm = nn.LayerNorm(proj_dim)
-
-        # 【关键】Synthesis Cross-Attention: Synthesis 作为 Query，辩论节点作为 K/V
-        # 这体现了论文 "Synthesis bridges the debate and analytical processes"
-        self.synth_cross_attn = nn.MultiheadAttention(
-            embed_dim=proj_dim,
-            num_heads=mha_heads,
-            dropout=gat_dropout,
-            batch_first=True,
+        self.evidence_attn_norm = nn.LayerNorm(proj_dim)
+        self.node_type_attention_bias = nn.Embedding(len(self.NODE_TYPE_IDS), 1)
+        nn.init.zeros_(self.node_type_attention_bias.weight)
+        self.relation_embedding = nn.Embedding(config.EVITED_NUM_EDGE_TYPES, proj_dim)
+        self.edge_pair_encoder = nn.Sequential(
+            nn.Linear(proj_dim * 2, proj_dim),
+            nn.GELU(),
+            nn.Dropout(classifier_dropout),
         )
-        self.synth_attn_norm = nn.LayerNorm(proj_dim)
+        self.edge_scorer = nn.Sequential(
+            nn.Linear(proj_dim * 3, proj_dim),
+            nn.GELU(),
+            nn.Dropout(classifier_dropout),
+            nn.Linear(proj_dim, 1),
+        )
 
-        # ═══════ Sub-module 5: 多视图融合分类器 ═══════
+        gate_input_dim = proj_dim * 10
+        self.alpha_news = self._build_gate(gate_input_dim, proj_dim, classifier_dropout)
+        self.alpha_debate = self._build_gate(gate_input_dim, proj_dim, classifier_dropout)
+        self.alpha_td = self._build_gate(gate_input_dim, proj_dim, classifier_dropout)
+        self.alpha_cs = self._build_gate(gate_input_dim, proj_dim, classifier_dropout)
+        self.alpha_evidence = self._build_gate(gate_input_dim, proj_dim, classifier_dropout)
+        self.alpha_graph = self._build_gate(gate_input_dim, proj_dim, classifier_dropout)
 
-        # 输入: [g_global; c_news; c_synth; divergence] = 4 * proj_dim
-        fusion_input_dim = proj_dim * 4
-
-        self.classifier = nn.Sequential(
-            nn.Linear(fusion_input_dim, proj_dim),
+        self.debate_fusion = nn.Sequential(
+            nn.Linear(proj_dim * 2, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
+        )
+        self.conflict_fusion = nn.Sequential(
+            nn.Linear(proj_dim * 4, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
+        )
+        self.final_proj = nn.Sequential(
+            nn.Linear(proj_dim * 6, proj_dim),
             nn.LayerNorm(proj_dim),
             nn.GELU(),
             nn.Dropout(classifier_dropout),
@@ -155,173 +145,317 @@ class TEDClassifier(nn.Module):
         )
 
     @staticmethod
-    def _resolve_bert_path(bert_name: str) -> str:
-        from pathlib import Path
+    def _build_gate(input_dim: int, proj_dim: int, dropout: float) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Linear(input_dim, proj_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(proj_dim, 1),
+            nn.Sigmoid(),
+        )
 
+    @staticmethod
+    def _resolve_bert_path(bert_name: str) -> str:
         dir_name = bert_name.split("/")[-1]
         local_path = config.BERT_LOCAL_DIR / dir_name
-
         if local_path.exists() and (local_path / "config.json").exists():
             return str(local_path)
-
         full_local = config.BERT_LOCAL_DIR / bert_name
         if full_local.exists() and (full_local / "config.json").exists():
             return str(full_local)
-
         return bert_name
 
     def _freeze_bert_layers(self, freeze_layers: int) -> None:
         for param in self.bert.embeddings.parameters():
             param.requires_grad = False
-
         for layer in self.bert.encoder.layer[:freeze_layers]:
             for param in layer.parameters():
                 param.requires_grad = False
 
-    def _encode_texts(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """BERT 编码，返回 [CLS] token 向量。"""
-        outputs = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-        )
+    def _encode_texts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         return outputs.last_hidden_state[:, 0, :]
 
-    def _masked_mean_pool(
-        self,
-        node_dense: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """基于 mask 的安全均值池化。"""
+    @staticmethod
+    def _masked_mean_pool(node_dense: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         mask_f = mask.unsqueeze(-1).float()
         weighted = node_dense * mask_f
         denom = mask_f.sum(dim=1).clamp(min=1.0)
         return weighted.sum(dim=1) / denom
 
+    def _pool_by_node_type(
+        self,
+        node_dense: torch.Tensor,
+        node_mask: torch.Tensor,
+        node_type_dense: torch.Tensor,
+        node_type: str,
+    ) -> torch.Tensor:
+        mask = (node_type_dense == self.NODE_TYPE_IDS[node_type]) & node_mask
+        return self._masked_mean_pool(node_dense, mask)
+
+    def _pool_argument_side(
+        self,
+        node_dense: torch.Tensor,
+        node_mask: torch.Tensor,
+        node_type_dense: torch.Tensor,
+        speaker_role_dense: torch.Tensor,
+        target_roles: set[int],
+    ) -> torch.Tensor:
+        arg_mask = (node_type_dense == self.NODE_TYPE_IDS["argument"]) & node_mask
+        role_mask = torch.zeros_like(node_mask)
+        for role_id in target_roles:
+            role_mask = role_mask | (speaker_role_dense == role_id)
+        return self._masked_mean_pool(node_dense, arg_mask & role_mask)
+
+    def _edge_reconstruction_stats(
+        self,
+        node_repr: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor,
+        batch: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        num_graphs = int(batch.max().item()) + 1 if batch.numel() else 1
+        if edge_index.numel() == 0:
+            graph_nll = node_repr.new_zeros(num_graphs)
+            return {
+                "structure_loss": node_repr.new_zeros(()),
+                "structure_nll": graph_nll,
+                "structure_likelihood": torch.ones_like(graph_nll),
+            }
+
+        pair_to_relations: dict[tuple[int, int], set[int]] = {}
+        src_list = edge_index[0].detach().cpu().tolist()
+        dst_list = edge_index[1].detach().cpu().tolist()
+        type_list = edge_type.clamp(min=0, max=config.EVITED_NUM_EDGE_TYPES - 1).detach().cpu().tolist()
+        for src, dst, rel_type in zip(src_list, dst_list, type_list):
+            pair_to_relations.setdefault((int(src), int(dst)), set()).add(int(rel_type))
+
+        negative_pairs = self._sample_negative_pairs(
+            positive_pairs=set(pair_to_relations),
+            batch=batch,
+            max_pairs=len(pair_to_relations),
+        )
+        all_pairs = list(pair_to_relations) + negative_pairs
+        if not all_pairs:
+            graph_nll = node_repr.new_zeros(num_graphs)
+            return {
+                "structure_loss": node_repr.new_zeros(()),
+                "structure_nll": graph_nll,
+                "structure_likelihood": torch.ones_like(graph_nll),
+            }
+
+        pair_tensor = torch.tensor(all_pairs, dtype=torch.long, device=node_repr.device)
+        features = torch.cat([node_repr[pair_tensor[:, 0]], node_repr[pair_tensor[:, 1]]], dim=-1)
+        logits = self._predict_edge_relations(features)
+        targets = logits.new_zeros((len(all_pairs), config.EVITED_NUM_EDGE_TYPES))
+        for row, pair in enumerate(pair_to_relations):
+            rel_ids = list(pair_to_relations[pair])
+            targets[row, rel_ids] = 1.0
+
+        pair_loss = F.binary_cross_entropy_with_logits(
+            logits,
+            targets,
+            reduction="none",
+        ).mean(dim=-1)
+        pair_graph = batch[pair_tensor[:, 0]]
+        loss_sum = pair_loss.new_zeros(num_graphs)
+        counts = pair_loss.new_zeros(num_graphs)
+        loss_sum.index_add_(0, pair_graph, pair_loss)
+        counts.index_add_(0, pair_graph, torch.ones_like(pair_loss))
+        graph_nll = loss_sum / counts.clamp(min=1.0)
+        return {
+            "structure_loss": pair_loss.mean(),
+            "structure_nll": graph_nll,
+            "structure_likelihood": torch.exp(-graph_nll).clamp(min=1e-4, max=1.0),
+        }
+
+    def _predict_edge_relations(self, pair_features: torch.Tensor) -> torch.Tensor:
+        pair_repr = self.edge_pair_encoder(pair_features)
+        relation_repr = self.relation_embedding.weight.unsqueeze(0).expand(
+            pair_repr.size(0),
+            -1,
+            -1,
+        )
+        pair_repr = pair_repr.unsqueeze(1).expand(-1, config.EVITED_NUM_EDGE_TYPES, -1)
+        relation_features = torch.cat(
+            [pair_repr, relation_repr, pair_repr * relation_repr],
+            dim=-1,
+        )
+        return self.edge_scorer(relation_features).squeeze(-1)
+
+    @staticmethod
+    def _sample_negative_pairs(
+        positive_pairs: set[tuple[int, int]],
+        batch: torch.Tensor,
+        max_pairs: int,
+    ) -> list[tuple[int, int]]:
+        if max_pairs <= 0:
+            return []
+
+        batch_list = batch.detach().cpu().tolist()
+        nodes_by_graph: dict[int, list[int]] = {}
+        for node_idx, graph_id in enumerate(batch_list):
+            nodes_by_graph.setdefault(int(graph_id), []).append(node_idx)
+
+        negative_pairs: list[tuple[int, int]] = []
+        for src, dst in positive_pairs:
+            graph_nodes = nodes_by_graph.get(batch_list[src], [])
+            if len(graph_nodes) < 2:
+                continue
+            try:
+                start = (graph_nodes.index(dst) + 1) % len(graph_nodes)
+            except ValueError:
+                start = 0
+            for offset in range(len(graph_nodes)):
+                cand = graph_nodes[(start + offset) % len(graph_nodes)]
+                pair = (src, cand)
+                if cand != src and pair not in positive_pairs:
+                    negative_pairs.append(pair)
+                    break
+            if len(negative_pairs) >= max_pairs:
+                break
+        return negative_pairs
+
+    def _evidence_aware_attention(
+        self,
+        h_news: torch.Tensor,
+        node_dense: torch.Tensor,
+        node_mask: torch.Tensor,
+        node_type_dense: torch.Tensor,
+        node_reliability_dense: torch.Tensor,
+    ) -> torch.Tensor:
+        type_ids = node_type_dense.clamp(min=0).long()
+        type_bias = self.node_type_attention_bias(type_ids).squeeze(-1)
+        reliability_bias = node_reliability_dense.clamp(min=1e-4, max=1.0).log()
+        attn_bias = (type_bias + reliability_bias).masked_fill(~node_mask, -1e4)
+        attn_mask = attn_bias[:, None, :].repeat_interleave(
+            self.evidence_interactive_attn.num_heads,
+            dim=0,
+        )
+        attn_mask = attn_mask.to(dtype=h_news.dtype, device=h_news.device)
+        h_attn, _ = self.evidence_interactive_attn(
+            h_news.unsqueeze(1),
+            node_dense,
+            node_dense,
+            attn_mask=attn_mask,
+            need_weights=False,
+        )
+        return self.evidence_attn_norm(h_attn.squeeze(1) + h_news)
+
     def forward(
         self,
         node_input_ids: torch.Tensor,
         node_attention_mask: torch.Tensor,
-        role_ids: torch.Tensor,
-        edge_index: torch.Tensor,
-        batch: torch.Tensor,
         news_input_ids: torch.Tensor,
         news_attention_mask: torch.Tensor,
-        synth_input_ids: torch.Tensor,
-        synth_attention_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        # ── 1. Role-aware Encoder (6 辩论节点) ──
-        node_text_features = self._encode_texts(
-            node_input_ids, node_attention_mask
-        )  # [total_nodes=B*6, 768]
-        role_emb = self.role_embedding(role_ids)
-        role_proj = self.role_proj(role_emb)
-        node_features = torch.cat(
-            [node_text_features, role_proj], dim=-1
-        )  # [total_nodes, node_dim]
+        node_type_ids: torch.Tensor,
+        speaker_role_ids: torch.Tensor,
+        node_reliability: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor,
+        source_bucket: torch.Tensor,
+        time_features: torch.Tensor,
+        teacher_features: torch.Tensor,
+        batch: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        text_features = self._encode_texts(node_input_ids, node_attention_mask)
+        type_features = self.node_type_embedding(node_type_ids)
+        role_features = self.speaker_role_embedding(speaker_role_ids)
+        x = torch.cat([text_features, type_features, role_features], dim=-1)
+        x = self.input_norm(self.input_proj(x))
 
-        # ── 2. GAT 消息传播 (带残差) ──
-        x = node_features
-        x_residual = self.gat_input_proj(node_features)
-
-        for i, (gat_layer, norm) in enumerate(
-            zip(self.gat_layers, self.gat_norms)
-        ):
+        for layer, norm in zip(self.rgcn_layers, self.rgcn_norms):
             x_in = x
-            x = gat_layer(x, edge_index)
-            x = norm(x)
+            x = layer(x, edge_index, edge_type)
+            x = norm(x + x_in)
+            x = self.activation(x)
+            x = self.dropout(x)
 
-            if i == 0:
-                x = x + x_residual
-            elif x_in.shape == x.shape:
-                x = x + x_in
-
-            if i < len(self.gat_layers) - 1:
-                x = self.gat_activation(x)
-                x = self.gat_dropout(x)
-
-        # x: [total_nodes, gat_hidden_dim]
-
-        # ── 3. 节点级投影 + 稠密批 ──
-        node_proj = self.node_proj(x)  # [total_nodes, P]
+        node_proj = self.node_proj(x)
         node_dense, node_mask = to_dense_batch(node_proj, batch)
-        # node_dense: [B, 6, P]; node_mask: [B, 6] (全为 True，因为每图 6 节点)
-        role_dense, _ = to_dense_batch(role_ids, batch, fill_value=-1)
+        node_type_dense, _ = to_dense_batch(node_type_ids, batch, fill_value=-1)
+        speaker_role_dense, _ = to_dense_batch(speaker_role_ids, batch, fill_value=0)
+        node_reliability_dense, _ = to_dense_batch(node_reliability, batch, fill_value=0.0)
 
-        # ── 4. 新闻编码 + 投影 ──
         news_features = self._encode_texts(news_input_ids, news_attention_mask)
-        e_news = self.news_proj(news_features)  # [B, P]
+        h_news = self.news_proj(news_features)
+        h_claim = self._pool_by_node_type(node_dense, node_mask, node_type_dense, "claim")
+        h_td = self._pool_by_node_type(node_dense, node_mask, node_type_dense, "td_rationale")
+        h_cs = self._pool_by_node_type(node_dense, node_mask, node_type_dense, "cs_rationale")
+        h_evidence = self._pool_by_node_type(node_dense, node_mask, node_type_dense, "evidence")
+        h_synth = self._pool_by_node_type(node_dense, node_mask, node_type_dense, "synthesis")
+        h_graph = self._masked_mean_pool(node_dense, node_mask)
 
-        # ── 5. Synthesis 编码 + 投影 ──
-        synth_features = self._encode_texts(synth_input_ids, synth_attention_mask)
-        e_synth = self.synth_proj(synth_features)  # [B, P]
-
-        # ── 6. 【核心1】News Cross-Attention ──
-        q_news = e_news.unsqueeze(1)  # [B, 1, P]
-        c_news, _ = self.news_cross_attn(
-            q_news,
+        h_arg = self._pool_by_node_type(node_dense, node_mask, node_type_dense, "argument")
+        h_debate = self.debate_fusion(torch.cat([h_arg, h_synth], dim=-1))
+        h_source = self.source_encoder(self.source_embedding(source_bucket))
+        h_time = self.time_encoder(time_features.float())
+        h_meta = self.meta_fusion(torch.cat([h_source, h_time], dim=-1))
+        h_teacher = self.teacher_encoder(teacher_features.float())
+        h_attn = self._evidence_aware_attention(
+            h_news,
             node_dense,
-            node_dense,
-            key_padding_mask=~node_mask,
+            node_mask,
+            node_type_dense,
+            node_reliability_dense,
         )
-        c_news = c_news.squeeze(1)  # [B, P]
-        c_news = self.news_attn_norm(c_news + e_news)  # 残差
 
-        # ── 7. 【核心2】Synthesis Cross-Attention ──
-        q_synth = e_synth.unsqueeze(1)  # [B, 1, P]
-        c_synth, _ = self.synth_cross_attn(
-            q_synth,
+        g_pro = self._pool_argument_side(
             node_dense,
-            node_dense,
-            key_padding_mask=~node_mask,
+            node_mask,
+            node_type_dense,
+            speaker_role_dense,
+            self.PRO_SPEAKER_ROLE_IDS,
         )
-        c_synth = c_synth.squeeze(1)  # [B, P]
-        c_synth = self.synth_attn_norm(c_synth + e_synth)  # 残差
+        g_opp = self._pool_argument_side(
+            node_dense,
+            node_mask,
+            node_type_dense,
+            speaker_role_dense,
+            self.OPP_SPEAKER_ROLE_IDS,
+        )
+        divergence = torch.abs(g_pro - g_opp)
+        conflict_repr = self.conflict_fusion(
+            torch.cat([g_pro, g_opp, divergence, g_pro * g_opp], dim=-1)
+        )
 
-        # ── 8. 全图均值池化 ──
-        g_global = self._masked_mean_pool(node_dense, node_mask)  # [B, P]
-
-        # ── 9. 【核心3】立场感知双分支聚合 ──
-        pro_mask = torch.zeros_like(node_mask)
-        for r in self.PRO_ROLE_IDS:
-            pro_mask = pro_mask | (role_dense == r)
-        pro_mask = pro_mask & node_mask
-
-        opp_mask = torch.zeros_like(node_mask)
-        for r in self.OPP_ROLE_IDS:
-            opp_mask = opp_mask | (role_dense == r)
-        opp_mask = opp_mask & node_mask
-
-        g_pro = self._masked_mean_pool(node_dense, pro_mask)
-        g_opp = self._masked_mean_pool(node_dense, opp_mask)
-
-        # 立场分歧信号
-        divergence = torch.abs(g_pro - g_opp)  # [B, P]
-
-        # ── 10. 多视图融合 + 分类 ──
-        combined = torch.cat(
-            [g_global, c_news, c_synth, divergence],
+        gate_context = torch.cat(
+            [h_news, h_attn, h_debate, h_td, h_cs, h_evidence, h_claim, h_meta, h_teacher, h_graph],
             dim=-1,
-        )  # [B, 4P]
+        )
+        alpha_news = self.alpha_news(gate_context)
+        alpha_debate = self.alpha_debate(gate_context)
+        alpha_td = self.alpha_td(gate_context)
+        alpha_cs = self.alpha_cs(gate_context)
+        alpha_evidence = self.alpha_evidence(gate_context)
+        alpha_graph = self.alpha_graph(gate_context)
 
-        logits = self.classifier(combined)  # [B, 2]
+        weighted_sum = (
+            alpha_news * h_news
+            + alpha_debate * h_debate
+            + alpha_td * h_td
+            + alpha_cs * h_cs
+            + alpha_evidence * h_evidence
+            + alpha_graph * h_graph
+        )
 
-        return logits
+        final_input = torch.cat([weighted_sum, h_attn, h_claim, h_meta, h_teacher, conflict_repr], dim=-1)
+        logits = self.final_proj(final_input)
+        structure_stats = self._edge_reconstruction_stats(node_proj, edge_index, edge_type, batch)
+        return {
+            "logits": logits,
+            **structure_stats,
+            "alpha_news": alpha_news.squeeze(-1),
+            "alpha_debate": alpha_debate.squeeze(-1),
+            "alpha_td": alpha_td.squeeze(-1),
+            "alpha_cs": alpha_cs.squeeze(-1),
+            "alpha_evidence": alpha_evidence.squeeze(-1),
+            "alpha_graph": alpha_graph.squeeze(-1),
+        }
 
 
 class FocalLoss(nn.Module):
-    """
-    Focal Loss for imbalanced classification.
-
-    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
-
-    注意：V4 默认使用 CrossEntropy + class_weight (config.USE_FOCAL_LOSS=False)
-    因为 V3 实验显示 Focal Loss 反而过拟合、val acc 下降。
-    保留此类以便消融实验。
-    """
+    """Focal loss for imbalanced classification."""
 
     def __init__(
         self,
@@ -336,7 +470,7 @@ class FocalLoss(nn.Module):
         self.label_smoothing = label_smoothing
         self.reduction = reduction
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def per_sample_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         num_classes = logits.size(-1)
         log_probs = F.log_softmax(logits, dim=-1)
 
@@ -346,28 +480,24 @@ class FocalLoss(nn.Module):
                     log_probs,
                     self.label_smoothing / (num_classes - 1),
                 )
-                soft_targets.scatter_(
-                    1,
-                    targets.unsqueeze(1),
-                    1.0 - self.label_smoothing,
-                )
+                soft_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
             ce = -(soft_targets * log_probs).sum(dim=-1)
-            with torch.no_grad():
-                p_t = log_probs.exp().gather(1, targets.unsqueeze(1)).squeeze(1)
+            p_t = log_probs.exp().gather(1, targets.unsqueeze(1)).squeeze(1)
         else:
             ce = F.nll_loss(log_probs, targets, reduction="none")
             p_t = log_probs.exp().gather(1, targets.unsqueeze(1)).squeeze(1)
 
-        focal_weight = (1.0 - p_t).pow(self.gamma)
+        loss = (1.0 - p_t).pow(self.gamma) * ce
 
         if self.alpha is not None:
-            alpha_t = self.alpha.to(logits.device)[targets]
-            loss = alpha_t * focal_weight * ce
-        else:
-            loss = focal_weight * ce
+            alpha_t = self.alpha.to(logits.device).gather(0, targets)
+            loss = alpha_t * loss
+        return loss
 
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        loss = self.per_sample_loss(logits, targets)
         if self.reduction == "mean":
             return loss.mean()
-        elif self.reduction == "sum":
+        if self.reduction == "sum":
             return loss.sum()
         return loss

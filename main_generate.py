@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_NODE_COUNT = 7
 EXPECTED_EDGE_COUNT = 22
-COMPLETE_END_CHARS = '.!?"\')]}。！？；：”’）】》'
+COMPLETE_END_CHARS = '.!?"\')]}。！？；：”’）】》0123456789'
 REQUIRED_KEYS = {
     "id",
     "news_text",
@@ -48,6 +48,10 @@ REQUIRED_KEYS = {
     "nodes",
     "edge_index",
     "synthesis",
+    "claim_texts",
+    "claims",
+    "rationale_cards",
+    "synthesis_structured",
 }
 
 
@@ -106,6 +110,48 @@ def load_dataset(dataset: str, split: str) -> list[dict]:
     return records
 
 
+def load_evidence_file(evidence_file: str | Path | None) -> dict[int, list[dict]]:
+    """Load optional EviTED evidence cards aligned by sample id."""
+    if evidence_file is None:
+        return {}
+
+    path = Path(evidence_file)
+    if not path.exists():
+        raise FileNotFoundError(f"Evidence file not found: {path}")
+
+    rows: list[dict] = []
+    if path.suffix == ".jsonl":
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    rows.append(json.loads(line))
+    else:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                if isinstance(value, dict):
+                    row = dict(value)
+                    row.setdefault("id", key)
+                else:
+                    row = {"id": key, "evidence_cards": value}
+                rows.append(row)
+        elif isinstance(payload, list):
+            rows = payload
+        else:
+            raise ValueError(f"Unsupported evidence JSON payload: {type(payload)}")
+
+    evidence_map: dict[int, list[dict]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or "id" not in row:
+            continue
+        cards = row.get("evidence_cards", row.get("retrieval_evidence", []))
+        if not isinstance(cards, list):
+            cards = []
+        evidence_map[int(row["id"])] = cards
+    logger.info("Loaded evidence for %s samples from %s", len(evidence_map), path)
+    return evidence_map
 def _output_file_for(
     item_id: int, output_dir: Path, dataset: str, split: str
 ) -> Path:
@@ -125,7 +171,13 @@ def _text_looks_incomplete(text: str) -> bool:
     return False
 
 
-def _validate_output_record(record: dict, item: dict, dataset: str, split: str) -> str | None:
+def _validate_output_record(
+    record: dict,
+    item: dict,
+    dataset: str,
+    split: str,
+    require_evidence: bool = False,
+) -> str | None:
     missing_keys = REQUIRED_KEYS - set(record.keys())
     if missing_keys:
         return f"missing_keys={sorted(missing_keys)}"
@@ -152,6 +204,13 @@ def _validate_output_record(record: dict, item: dict, dataset: str, split: str) 
             return f"empty_text={node.get('role_name')}"
         if _text_looks_incomplete(text):
             return f"incomplete_text={node.get('role_name')}"
+        if node.get("role_id") != config.ROLE_IDS["synthesis"]:
+            argument = str(node.get("argument", "")).strip()
+            reasoning = str(node.get("reasoning", "")).strip()
+            if not argument:
+                return f"empty_argument={node.get('role_name')}"
+            if not reasoning:
+                return f"empty_reasoning={node.get('role_name')}"
 
     edge_index = record["edge_index"]
     if (
@@ -168,6 +227,51 @@ def _validate_output_record(record: dict, item: dict, dataset: str, split: str) 
         return "empty_synthesis"
     if _text_looks_incomplete(synthesis):
         return "incomplete_synthesis"
+
+    claim_texts = record.get("claim_texts")
+    if not isinstance(claim_texts, list) or len(claim_texts) == 0:
+        return "empty_claim_texts"
+    if not all(isinstance(x, str) and x.strip() for x in claim_texts):
+        return "bad_claim_texts"
+
+    claims = record.get("claims")
+    if not isinstance(claims, list) or len(claims) == 0:
+        return "empty_claims"
+    for claim in claims:
+        if not isinstance(claim, dict):
+            return "bad_claim_obj"
+        if not str(claim.get("id", "")).strip() or not str(claim.get("content", "")).strip():
+            return "bad_claim_fields"
+
+    rationale_cards = record.get("rationale_cards")
+    if not isinstance(rationale_cards, list):
+        return "bad_rationale_cards"
+    for card in rationale_cards:
+        if not isinstance(card, dict):
+            return "bad_rationale_card_obj"
+        if not str(card.get("id", "")).strip() or not str(card.get("content", "")).strip():
+            return "bad_rationale_card_fields"
+
+    evidence_cards = record.get("evidence_cards", [])
+    if require_evidence:
+        if not isinstance(evidence_cards, list) or len(evidence_cards) == 0:
+            return "empty_evidence_cards"
+    if evidence_cards:
+        if not isinstance(evidence_cards, list):
+            return "bad_evidence_cards"
+        for card in evidence_cards:
+            if not isinstance(card, dict):
+                return "bad_evidence_card_obj"
+            if not str(card.get("id", "")).strip():
+                return "bad_evidence_card_id"
+            if not str(card.get("evidence_text", "")).strip():
+                return "bad_evidence_card_text"
+
+    synthesis_structured = record.get("synthesis_structured")
+    if not isinstance(synthesis_structured, dict):
+        return "bad_synthesis_structured"
+    if not str(synthesis_structured.get("final_debate_tendency", "")).strip():
+        return "bad_synthesis_tendency"
 
     return None
 
@@ -208,11 +312,37 @@ def _build_output(item: dict, dataset: str, split: str, debate_record: dict) -> 
         "nodes": debate_record["nodes"],
         "edge_index": debate_record["edge_index"],
         "synthesis": debate_record["synthesis"],
+        "claim_texts": debate_record["claim_texts"],
+        "claims": debate_record["claims"],
+        "rationale_cards": debate_record["rationale_cards"],
+        "evidence_cards": debate_record.get("evidence_cards", []),
+        "synthesis_structured": debate_record["synthesis_structured"],
+        "td_rationale": item.get("td_rationale", ""),
+        "cs_rationale": item.get("cs_rationale", ""),
+        "td_pred": item.get("td_pred", -1),
+        "cs_pred": item.get("cs_pred", -1),
+        "td_acc": item.get("td_acc", -1),
+        "cs_acc": item.get("cs_acc", -1),
+        "time": item.get("time", ""),
+        "source_id": item.get("source_id", -1),
     }
 
 
-def _generate_one_record(item: dict, dataset: str, split: str) -> dict:
-    debate_model = DebateModel(item["text"], lang=dataset)
+def _generate_one_record(
+    item: dict,
+    dataset: str,
+    split: str,
+    evidence_cards: list[dict] | None = None,
+) -> dict:
+    debate_model = DebateModel(
+        item["text"],
+        lang=dataset,
+        td_rationale=item.get("td_rationale", ""),
+        cs_rationale=item.get("cs_rationale", ""),
+        td_pred=item.get("td_pred", -1),
+        cs_pred=item.get("cs_pred", -1),
+        evidence_cards=evidence_cards,
+    )
     debate_model.step()
     debate_record = debate_model.get_debate_record()
     return _build_output(item, dataset, split, debate_record)
@@ -225,6 +355,8 @@ def process_single_news(
     split: str,
     item_retries: int,
     retry_backoff_s: float,
+    evidence_cards: list[dict] | None = None,
+    require_evidence: bool = False,
 ) -> dict:
     """Generate one sample with validation, retries, and atomic writes."""
     item_id = item["id"]
@@ -233,7 +365,13 @@ def process_single_news(
     if output_file.exists():
         existing = _load_existing_output(output_file)
         if existing is not None:
-            validation_error = _validate_output_record(existing, item, dataset, split)
+            validation_error = _validate_output_record(
+                existing,
+                item,
+                dataset,
+                split,
+                require_evidence=require_evidence,
+            )
             if validation_error is None:
                 return {
                     "status": "SKIP",
@@ -251,8 +389,14 @@ def process_single_news(
     last_error = "unknown"
     for attempt in range(1, item_retries + 1):
         try:
-            output = _generate_one_record(item, dataset, split)
-            validation_error = _validate_output_record(output, item, dataset, split)
+            output = _generate_one_record(item, dataset, split, evidence_cards=evidence_cards)
+            validation_error = _validate_output_record(
+                output,
+                item,
+                dataset,
+                split,
+                require_evidence=require_evidence,
+            )
             if validation_error is not None:
                 raise ValueError(f"generated_invalid_output: {validation_error}")
 
@@ -301,6 +445,8 @@ def _run_generation_pass(
     item_retries: int,
     retry_backoff_s: float,
     desc: str,
+    evidence_map: dict[int, list[dict]] | None = None,
+    require_evidence: bool = False,
 ) -> tuple[dict, list[dict]]:
     results = {"OK": 0, "SKIP": 0, "ERROR": 0}
     failures: list[dict] = []
@@ -315,6 +461,8 @@ def _run_generation_pass(
                 split,
                 item_retries,
                 retry_backoff_s,
+                (evidence_map or {}).get(int(item["id"]), []),
+                require_evidence,
             ): item["id"]
             for item in records
         }
@@ -414,6 +562,12 @@ def main() -> None:
         default=1,
         help="Additional serial rescue rounds for failed samples",
     )
+    parser.add_argument(
+        "--evidence_file",
+        type=str,
+        default=None,
+        help="Optional EviTED evidence JSON/JSONL file aligned by sample id",
+    )
     args = parser.parse_args()
 
     output_dir = config.OUTPUT_DIR / f"{args.dataset}_{args.split}"
@@ -424,6 +578,8 @@ def main() -> None:
         logger.info("Removed %s stale temp files from %s", removed_temp_files, output_dir)
 
     records = load_dataset(args.dataset, args.split)
+    evidence_map = load_evidence_file(args.evidence_file)
+    require_evidence = args.evidence_file is not None
     if args.max_samples is not None:
         records = records[: args.max_samples]
         logger.info("Truncated to %s samples", args.max_samples)
@@ -449,6 +605,8 @@ def main() -> None:
         item_retries=args.item_retries,
         retry_backoff_s=args.retry_backoff_s,
         desc="Generating debates",
+        evidence_map=evidence_map,
+        require_evidence=require_evidence,
     )
     for key, value in first_pass_results.items():
         all_results[key] = all_results.get(key, 0) + value
@@ -473,6 +631,8 @@ def main() -> None:
             item_retries=args.item_retries,
             retry_backoff_s=args.retry_backoff_s,
             desc=f"Rescue round {round_idx}",
+            evidence_map=evidence_map,
+            require_evidence=require_evidence,
         )
         for key, value in round_results.items():
             if key != "SKIP":

@@ -84,6 +84,46 @@ def main():
         help="冻结 BERT 前 N 层"
     )
     parser.add_argument(
+        "--lambda_rel", type=float, default=config.RTED_RELIABILITY_LOSS_WEIGHT,
+        help="R-TED rationale reliability 辅助损失权重"
+    )
+    parser.add_argument(
+        "--lambda_cons", type=float, default=config.RTED_CONSISTENCY_LOSS_WEIGHT,
+        help="R-TED debate-rationale consistency 辅助损失权重"
+    )
+    parser.add_argument(
+        "--lambda_struct", type=float, default=config.EVITED_STRUCTURE_LOSS_WEIGHT,
+        help="EviTED relation-aware graph structure 正则权重"
+    )
+    parser.add_argument(
+        "--disable_causal_debias", action="store_true",
+        help="关闭 4.7 causal debias 样本级加权"
+    )
+    parser.add_argument(
+        "--lambda_kl", type=float, default=config.EVITED_CAUSAL_KL_WEIGHT,
+        help="Causal posterior KL 正则权重"
+    )
+    parser.add_argument(
+        "--causal_prior", type=float, default=config.EVITED_CAUSAL_PRIOR,
+        help="样本可靠性隐变量的 Bernoulli prior"
+    )
+    parser.add_argument(
+        "--causal_conf_weight", type=float, default=config.EVITED_CAUSAL_CONF_WEIGHT,
+        help="分类置信度在 causal posterior 中的权重"
+    )
+    parser.add_argument(
+        "--causal_struct_weight", type=float, default=config.EVITED_CAUSAL_STRUCT_WEIGHT,
+        help="结构似然在 causal posterior 中的权重"
+    )
+    parser.add_argument(
+        "--causal_min_weight", type=float, default=config.EVITED_CAUSAL_MIN_WEIGHT,
+        help="样本级 causal weight 下界"
+    )
+    parser.add_argument(
+        "--causal_max_weight", type=float, default=config.EVITED_CAUSAL_MAX_WEIGHT,
+        help="样本级 causal weight 上界"
+    )
+    parser.add_argument(
         "--num_workers", type=int, default=default_workers,
         help="DataLoader 并行 worker 数"
     )
@@ -179,6 +219,14 @@ def main():
     logger.info(f"  Early Stop Patience: {args.early_stopping_patience}")
     logger.info(f"  AMP:         {not args.no_amp}")
     logger.info(f"  BERT Freeze: {args.freeze_layers} layers")
+    logger.info(f"  Lambda Rel:  {args.lambda_rel}")
+    logger.info(f"  Lambda Cons: {args.lambda_cons}")
+    logger.info(f"  Lambda Struct: {args.lambda_struct}")
+    logger.info(f"  Causal Debias: {not args.disable_causal_debias}")
+    logger.info(f"  Lambda KL:   {args.lambda_kl}")
+    logger.info(f"  Causal Prior: {args.causal_prior}")
+    logger.info(f"  Causal Fusion Weights: conf={args.causal_conf_weight}, struct={args.causal_struct_weight}")
+    logger.info(f"  Causal Weight Clip: [{args.causal_min_weight}, {args.causal_max_weight}]")
     logger.info(f"  Num Workers: {args.num_workers}")
     logger.info("=" * 60)
 
@@ -197,6 +245,16 @@ def main():
         use_amp=not args.no_amp,
         early_stopping_patience=args.early_stopping_patience,
         label_smoothing=args.label_smoothing,
+        rationale_loss_weight=args.lambda_rel,
+        consistency_loss_weight=args.lambda_cons,
+        structure_loss_weight=args.lambda_struct,
+        use_causal_debias=not args.disable_causal_debias,
+        causal_kl_weight=args.lambda_kl,
+        causal_prior=args.causal_prior,
+        causal_conf_weight=args.causal_conf_weight,
+        causal_struct_weight=args.causal_struct_weight,
+        causal_min_weight=args.causal_min_weight,
+        causal_max_weight=args.causal_max_weight,
     )
 
     # ── 输出最终结果 ──
