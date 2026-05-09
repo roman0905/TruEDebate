@@ -217,3 +217,15 @@ output/
 # 忽略具体的论文和生成的文本文件
 *.pdf
 _paper_text.txt
+# 忽略本地 AI 工具配置
+
+.codex
+
+# 忽略大型模型和训练记录文件夹
+
+checkpoints/
+models/
+
+# 忽略临时或本地专属文档
+
+AGENTS.md
