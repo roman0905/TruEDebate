@@ -9,8 +9,10 @@ TruEDebate (TED) — 阶段 2: 本地模型训练与评估
 
 import argparse
 import logging
+import random
 import sys
 
+import numpy as np
 import torch
 from torch_geometric.loader import DataLoader
 
@@ -30,6 +32,14 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+def set_seed(seed: int) -> None:
+    """固定随机种子，提升实验可复现性。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def main():
@@ -53,6 +63,10 @@ def main():
         help="学习率"
     )
     parser.add_argument(
+        "--weight_decay", type=float, default=config.WEIGHT_DECAY,
+        help="权重衰减"
+    )
+    parser.add_argument(
         "--device", type=str, default=None,
         help="训练设备 (cuda / cpu，默认自动检测)"
     )
@@ -68,7 +82,25 @@ def main():
         "--freeze_layers", type=int, default=config.BERT_FREEZE_LAYERS,
         help="冻结 BERT 前 N 层"
     )
+    parser.add_argument(
+        "--data_suffix", type=str, default="",
+        help="辩论输出目录后缀，例如 _pamd 表示读取 output/en_train_pamd"
+    )
+    parser.add_argument(
+        "--no_typed_edges", action="store_true",
+        help="禁用 edge_type 边类型嵌入，用于消融实验"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=config.SEED,
+        help="随机种子"
+    )
+    parser.add_argument(
+        "--checkpoint_dir", type=str, default=str(config.CHECKPOINT_DIR),
+        help="模型与指标保存目录"
+    )
     args = parser.parse_args()
+
+    set_seed(args.seed)
 
     # ── 设备选择 ──
     if args.device:
@@ -86,9 +118,9 @@ def main():
     # ── 加载数据集 ──
     logger.info("加载数据集...")
 
-    train_dir = config.OUTPUT_DIR / f"{args.dataset}_train"
-    val_dir = config.OUTPUT_DIR / f"{args.dataset}_val"
-    test_dir = config.OUTPUT_DIR / f"{args.dataset}_test"
+    train_dir = config.OUTPUT_DIR / f"{args.dataset}_train{args.data_suffix}"
+    val_dir = config.OUTPUT_DIR / f"{args.dataset}_val{args.data_suffix}"
+    test_dir = config.OUTPUT_DIR / f"{args.dataset}_test{args.data_suffix}"
 
     train_dataset = DebateGraphDataset(train_dir, lang=args.dataset)
     val_dataset = DebateGraphDataset(val_dir, lang=args.dataset)
@@ -133,6 +165,7 @@ def main():
     model = TEDClassifier(
         lang=args.dataset,
         freeze_layers=args.freeze_layers,
+        use_typed_edges=not args.no_typed_edges,
     )
 
     # 打印模型参数统计
@@ -150,8 +183,13 @@ def main():
     logger.info(f"  Grad Accum:  {args.grad_accum}")
     logger.info(f"  Effective BS: {args.batch_size * args.grad_accum}")
     logger.info(f"  Learning Rate: {args.lr}")
+    logger.info(f"  Weight Decay: {args.weight_decay}")
     logger.info(f"  AMP:         {not args.no_amp}")
     logger.info(f"  BERT Freeze: {args.freeze_layers} layers")
+    logger.info(f"  Data Suffix: {args.data_suffix or '(none)'}")
+    logger.info(f"  Edge Type:   {not args.no_typed_edges}")
+    logger.info(f"  Seed:        {args.seed}")
+    logger.info(f"  Checkpoint:  {args.checkpoint_dir}")
     logger.info("=" * 60)
 
     # 更新全局梯度累积配置
@@ -165,7 +203,10 @@ def main():
         device=device,
         epochs=args.epochs,
         lr=args.lr,
+        weight_decay=args.weight_decay,
         use_amp=not args.no_amp,
+        checkpoint_dir=args.checkpoint_dir,
+        grad_accum_steps=args.grad_accum,
     )
 
     # ── 输出最终结果 ──

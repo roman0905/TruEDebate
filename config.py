@@ -1,0 +1,171 @@
+"""
+TruEDebate (TED/PAMD) 全局配置文件。
+"""
+
+import os
+from pathlib import Path
+
+
+# ──────────────────────────────── 路径配置 ────────────────────────────────
+
+ROOT_DIR = Path(__file__).resolve().parent
+DATA_DIR = ROOT_DIR / "data"
+OUTPUT_DIR = ROOT_DIR / "output"
+CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
+BERT_LOCAL_DIR = ROOT_DIR / "models"
+
+OUTPUT_DIR.mkdir(exist_ok=True)
+CHECKPOINT_DIR.mkdir(exist_ok=True)
+
+
+# ──────────────────────────────── OpenAI 配置 ────────────────────────────────
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-w8D4s4Z69HMmgUqp1FKpD0Ozz37iW2pGJHEAI9WDand20X1d")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://yunwu.ai/v1")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "1024"))
+OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
+
+
+# ──────────────────────────────── 图角色配置 ────────────────────────────────
+
+ROLE_IDS = {
+    # 原始 TED 角色，保持旧输出兼容。
+    "proponent_opening": 0,
+    "opponent_opening": 1,
+    "proponent_questioner": 2,
+    "opponent_questioner": 3,
+    "proponent_closing": 4,
+    "opponent_closing": 5,
+    "synthesis": 6,
+    # Perspective-Adaptive Multi-Agent Debate 新增角色。
+    "perspective_planner": 7,
+    "perspective_factual_consistency": 8,
+    "perspective_causal_reasoning": 9,
+    "perspective_temporal_reasoning": 10,
+    "perspective_emotional_manipulation": 11,
+    "perspective_intent_analysis": 12,
+    "perspective_linguistic_style": 13,
+    "perspective_coordinator": 14,
+    "self_reflective_judge": 15,
+    "role_reversal_judge": 16,
+    "final_judge": 17,
+}
+NUM_ROLES = max(ROLE_IDS.values()) + 1
+
+# 原始 TED 边结构，用于兼容旧模式和旧 JSON。
+EDGE_LIST = [
+    (0, 2), (0, 3), (1, 2), (1, 3),
+    (2, 4), (2, 5), (3, 4), (3, 5),
+    (0, 1), (1, 0), (2, 3), (3, 2), (4, 5), (5, 4),
+    (0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6),
+]
+
+GRAPH_SCHEMA_VERSION = 3
+EDGE_TYPE_IDS = {
+    "temporal": 0,
+    "support": 1,
+    "attack": 2,
+    "synthesis": 3,
+    "self": 4,
+    "plan": 5,
+    "judge": 6,
+    "consistency": 7,
+    "cross_perspective": 8,
+}
+NUM_EDGE_TYPES = len(EDGE_TYPE_IDS)
+EDGE_TYPE_EMBED_DIM = 32
+TYPED_EDGE_LIST = [
+    (0, 2, "temporal"), (0, 3, "temporal"), (1, 2, "temporal"), (1, 3, "temporal"),
+    (2, 4, "temporal"), (2, 5, "temporal"), (3, 4, "temporal"), (3, 5, "temporal"),
+    (0, 4, "support"), (2, 4, "support"), (1, 5, "support"), (3, 5, "support"),
+    (0, 1, "attack"), (1, 0, "attack"), (2, 3, "attack"), (3, 2, "attack"),
+    (4, 5, "attack"), (5, 4, "attack"),
+    (0, 6, "synthesis"), (1, 6, "synthesis"), (2, 6, "synthesis"),
+    (3, 6, "synthesis"), (4, 6, "synthesis"), (5, 6, "synthesis"),
+]
+
+
+# ──────────────────────────────── 多视角辩论配置 ────────────────────────────────
+
+PERSPECTIVE_AGENT_DEFINITIONS = {
+    "factual_consistency": {
+        "role_name": "Factual Consistency Agent",
+        "role_id": ROLE_IDS["perspective_factual_consistency"],
+        "focus": "检查文本内部事实一致性、可验证细节、实体关系和来源可信度。",
+    },
+    "causal_reasoning": {
+        "role_name": "Causal Reasoning Agent",
+        "role_id": ROLE_IDS["perspective_causal_reasoning"],
+        "focus": "检查因果跳跃、错误归因、相关性被包装成因果性的问题。",
+    },
+    "temporal_reasoning": {
+        "role_name": "Temporal Reasoning Agent",
+        "role_id": ROLE_IDS["perspective_temporal_reasoning"],
+        "focus": "检查时间线、旧闻新炒、事件顺序、时间表达和年龄/日期一致性。",
+    },
+    "emotional_manipulation": {
+        "role_name": "Emotional Manipulation Agent",
+        "role_id": ROLE_IDS["perspective_emotional_manipulation"],
+        "focus": "检查煽动性、恐慌性、羞辱性、情绪攻击和过度道德化表述。",
+    },
+    "intent_analysis": {
+        "role_name": "Intent Agent",
+        "role_id": ROLE_IDS["perspective_intent_analysis"],
+        "focus": "判断是否存在政治操控、商业诱导、社会心理操纵或流量诱导意图。",
+    },
+    "linguistic_style": {
+        "role_name": "Linguistic Style Agent",
+        "role_id": ROLE_IDS["perspective_linguistic_style"],
+        "focus": "检查标题党、夸张表达、模糊来源、断言式语气和非新闻化写法。",
+    },
+}
+DEFAULT_PERSPECTIVE_TOP_K = int(os.getenv("PERSPECTIVE_TOP_K", "4"))
+DEFAULT_DEBATE_MODE = os.getenv("DEBATE_MODE", "perspective")
+
+
+# ──────────────────────────────── 模型与训练配置 ────────────────────────────────
+
+BERT_MODELS = {
+    "en": "bert-base-uncased",
+    "zh": "hfl/chinese-bert-wwm-ext",
+    "cn": "hfl/chinese-bert-wwm-ext",
+}
+BERT_MAX_LENGTH = 512
+BERT_HIDDEN_DIM = 768
+BERT_FREEZE_LAYERS = 6
+
+LABEL_MAP = {
+    "real": 0, "Real": 0, "REAL": 0, "true": 0, "True": 0, "TRUE": 0,
+    "fake": 1, "Fake": 1, "FAKE": 1, "false": 1, "False": 1, "FALSE": 1,
+    0: 0, 1: 1,
+}
+
+ROLE_EMBED_DIM = 32
+ROLE_PROJ_DIM = BERT_HIDDEN_DIM
+GAT_HIDDEN_DIM = 256
+GAT_HEADS = 4
+GAT_LAYERS = 2
+GAT_DROPOUT = 0.1
+PROJ_DIM = 256
+MHA_HEADS = 4
+CLASSIFIER_DROPOUT = 0.1
+NUMERIC_FEATURE_DIM = 8
+NUMERIC_FEATURE_PROJ_DIM = 64
+SANITIZE_FINAL_LABEL_TEXT = True
+
+BATCH_SIZE = 4
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 0.01
+EPOCHS = 30
+GRAD_ACCUM_STEPS = 4
+USE_AMP = True
+BERT_LR_FACTOR = 0.1
+WARMUP_RATIO = 0.15
+MIN_LR_RATIO = 0.01
+EARLY_STOPPING_PATIENCE = 8
+LABEL_SMOOTHING = 0.1
+USE_CLASS_WEIGHT = True
+GRAD_CLIP_MAX_NORM = 1.0
+MAX_WORKERS = 4
+SEED = 42

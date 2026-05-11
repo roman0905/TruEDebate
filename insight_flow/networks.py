@@ -7,6 +7,7 @@ TruEDebate (TED) — Analysis Agent 网络架构
 import torch
 import torch.nn as nn
 from torch_geometric.nn import GATConv, global_mean_pool
+from torch_geometric.utils import to_dense_batch
 from transformers import AutoModel
 
 import config
@@ -36,10 +37,14 @@ class TEDClassifier(nn.Module):
         proj_dim: int = config.PROJ_DIM,
         mha_heads: int = config.MHA_HEADS,
         freeze_layers: int = config.BERT_FREEZE_LAYERS,
+        use_typed_edges: bool = True,
+        numeric_feature_dim: int = config.NUMERIC_FEATURE_DIM,
+        numeric_feature_proj_dim: int = config.NUMERIC_FEATURE_PROJ_DIM,
     ):
         super().__init__()
 
         self.lang = lang
+        self.use_typed_edges = use_typed_edges
         bert_name = config.BERT_MODELS.get(lang, config.BERT_MODELS["en"])
         bert_hidden = config.BERT_HIDDEN_DIM
 
@@ -55,11 +60,28 @@ class TEDClassifier(nn.Module):
         # Role Embedding + Projection
         self.role_embedding = nn.Embedding(num_roles, role_embed_dim)
         self.role_proj = nn.Linear(role_embed_dim, role_proj_dim)
+        self.numeric_feature_dim = numeric_feature_dim
+        self.numeric_feature_proj = nn.Sequential(
+            nn.Linear(numeric_feature_dim, numeric_feature_proj_dim),
+            nn.LayerNorm(numeric_feature_proj_dim),
+            nn.ReLU(),
+            nn.Dropout(gat_dropout),
+        )
 
         # Node feature dimension after concatenation
-        node_dim = bert_hidden + role_proj_dim
+        node_dim = bert_hidden + role_proj_dim + numeric_feature_proj_dim
 
         # ═══════ Sub-module 2: GAT ═══════
+
+        if self.use_typed_edges:
+            self.edge_type_embedding = nn.Embedding(
+                config.NUM_EDGE_TYPES,
+                config.EDGE_TYPE_EMBED_DIM,
+            )
+            edge_dim = config.EDGE_TYPE_EMBED_DIM
+        else:
+            self.edge_type_embedding = None
+            edge_dim = None
 
         self.gat_layers = nn.ModuleList()
         self.gat_norms = nn.ModuleList()
@@ -72,6 +94,7 @@ class TEDClassifier(nn.Module):
                 heads=gat_heads,
                 concat=True,
                 dropout=gat_dropout,
+                edge_dim=edge_dim,
             )
         )
         self.gat_norms.append(nn.LayerNorm(gat_hidden_dim * gat_heads))
@@ -85,6 +108,7 @@ class TEDClassifier(nn.Module):
                     heads=gat_heads,
                     concat=True,
                     dropout=gat_dropout,
+                    edge_dim=edge_dim,
                 )
             )
             self.gat_norms.append(nn.LayerNorm(gat_hidden_dim * gat_heads))
@@ -97,6 +121,7 @@ class TEDClassifier(nn.Module):
                 heads=1,
                 concat=False,
                 dropout=gat_dropout,
+                edge_dim=edge_dim,
             )
         )
         self.gat_norms.append(nn.LayerNorm(gat_hidden_dim))
@@ -108,6 +133,7 @@ class TEDClassifier(nn.Module):
 
         # 投影层: 将 debate graph repr 和 news repr 映射到相同维度
         self.debate_proj = nn.Linear(gat_hidden_dim, proj_dim)
+        self.node_proj = nn.Linear(gat_hidden_dim, proj_dim)
         self.news_proj = nn.Linear(bert_hidden, proj_dim)
 
         # Multi-Head Attention
@@ -121,7 +147,14 @@ class TEDClassifier(nn.Module):
         # ═══════ Sub-module 4: Classifier (Eq.12) ═══════
         # 论文: y_hat = softmax(W_fc * h + b_fc)
         # CrossEntropyLoss 内置 softmax，所以输出 logits 即可
-        self.classifier = nn.Linear(proj_dim * 2, 2)
+        self.classifier_dropout = nn.Dropout(config.CLASSIFIER_DROPOUT)
+        self.classifier = nn.Sequential(
+            nn.Linear(proj_dim * 5, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.ReLU(),
+            nn.Dropout(config.CLASSIFIER_DROPOUT),
+            nn.Linear(proj_dim, 2),
+        )
 
     @staticmethod
     def _resolve_bert_path(bert_name: str) -> str:
@@ -189,7 +222,9 @@ class TEDClassifier(nn.Module):
         node_input_ids: torch.Tensor,
         node_attention_mask: torch.Tensor,
         role_ids: torch.Tensor,
+        numeric_features: torch.Tensor | None,
         edge_index: torch.Tensor,
+        edge_type: torch.Tensor | None,
         batch: torch.Tensor,
         news_input_ids: torch.Tensor,
         news_attention_mask: torch.Tensor,
@@ -201,7 +236,9 @@ class TEDClassifier(nn.Module):
             node_input_ids:      [total_nodes, seq_len]  所有图中节点的 token IDs
             node_attention_mask: [total_nodes, seq_len]  对应的 attention mask
             role_ids:            [total_nodes]           节点角色 ID
+            numeric_features:    [total_nodes, numeric_feature_dim] PAMD 数值特征
             edge_index:          [2, total_edges]        所有图中的边索引 (已由 PyG 合并)
+            edge_type:           [total_edges]           边类型 ID
             batch:               [total_nodes]           节点到图的映射 (PyG batch vector)
             news_input_ids:      [batch_size, seq_len]   每条新闻的 token IDs
             news_attention_mask: [batch_size, seq_len]   对应的 attention mask
@@ -217,17 +254,41 @@ class TEDClassifier(nn.Module):
         # 1b. Role embedding + projection → [total_nodes, role_proj_dim]
         role_emb = self.role_embedding(role_ids)        # [total_nodes, role_embed_dim]
         role_proj = self.role_proj(role_emb)             # [total_nodes, role_proj_dim]
+        if numeric_features is None:
+            numeric_features = torch.zeros(
+                node_text_features.shape[0],
+                self.numeric_feature_dim,
+                dtype=node_text_features.dtype,
+                device=node_text_features.device,
+            )
+        numeric_features = numeric_features.to(
+            device=node_text_features.device,
+            dtype=node_text_features.dtype,
+        )
+        numeric_proj = self.numeric_feature_proj(numeric_features)
 
         # 1c. 拼接文本特征与角色特征 → [total_nodes, node_dim]
-        node_features = torch.cat([node_text_features, role_proj], dim=-1)
+        node_features = torch.cat(
+            [node_text_features, role_proj, numeric_proj], dim=-1
+        )
 
         # ── 2. GAT 消息传播 ──
+
+        edge_attr = None
+        if self.use_typed_edges:
+            if edge_type is None:
+                edge_type = torch.zeros(
+                    edge_index.shape[1],
+                    dtype=torch.long,
+                    device=edge_index.device,
+                )
+            edge_attr = self.edge_type_embedding(edge_type)
 
         x = node_features
         for i, (gat_layer, norm) in enumerate(
             zip(self.gat_layers, self.gat_norms)
         ):
-            x = gat_layer(x, edge_index)       # GATConv
+            x = gat_layer(x, edge_index, edge_attr=edge_attr)       # GATConv
             x = norm(x)                         # LayerNorm
             if i < len(self.gat_layers) - 1:    # 非最后一层加激活和 dropout
                 x = self.gat_activation(x)
@@ -245,20 +306,30 @@ class TEDClassifier(nn.Module):
         g_proj = self.debate_proj(graph_repr)   # [batch_size, proj_dim]
         e_proj = self.news_proj(news_features)  # [batch_size, proj_dim]
 
-        # 3c. MHA: Query=news, Key=debate, Value=debate
-        # nn.MultiheadAttention 需要 [batch_size, seq_len, embed_dim]
-        # 这里 seq_len=1（单向量），所以 unsqueeze
+        # 3c. MHA: Query=news, Key/Value=节点级 debate 序列。
+        # 原实现将 pooled graph 当成长度 1 的 KV，attention 权重恒为 1；
+        # 这里改为新闻原文对所有 GAT 节点表示做交互注意力。
         q = e_proj.unsqueeze(1)     # [batch_size, 1, proj_dim]
-        kv = g_proj.unsqueeze(1)    # [batch_size, 1, proj_dim]
+        dense_nodes, node_mask = to_dense_batch(x, batch)
+        kv = self.node_proj(dense_nodes)    # [batch_size, max_nodes, proj_dim]
 
-        attn_output, _ = self.mha(q, kv, kv)   # [batch_size, 1, proj_dim]
+        attn_output, _ = self.mha(
+            q,
+            kv,
+            kv,
+            key_padding_mask=~node_mask,
+        )   # [batch_size, 1, proj_dim]
         attn_output = attn_output.squeeze(1)     # [batch_size, proj_dim]
         attn_output = self.mha_norm(attn_output)
 
         # ── 4. 分类器 ──
 
-        # 拼接 debate projection 和 MHA 交互表征
-        combined = torch.cat([g_proj, attn_output], dim=-1)  # [batch_size, proj_dim*2]
-        logits = self.classifier(combined)                    # [batch_size, 2]
+        # 显式保留新闻、辩论、交互以及匹配差异/乘积，避免新闻编码被淹没。
+        combined = torch.cat(
+            [g_proj, e_proj, attn_output, torch.abs(g_proj - e_proj), g_proj * e_proj],
+            dim=-1,
+        )
+        combined = self.classifier_dropout(combined)
+        logits = self.classifier(combined)
 
         return logits

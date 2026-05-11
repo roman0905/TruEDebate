@@ -3,8 +3,8 @@ TruEDebate (TED) — Prompt 模板与 LLM 调用工具
 包含辩论三阶段的 Prompt 模板和 Synthesis Agent 的总结模板。
 """
 
-import os
 import logging
+import os
 from openai import OpenAI
 
 import config
@@ -209,6 +209,175 @@ reliable channels.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Perspective-Adaptive Multi-Agent Debate Prompt
+# ═══════════════════════════════════════════════════════════════════════════════
+
+PERSPECTIVE_PLANNER_SYSTEM = (
+    "You are the Perspective Planner for fake-news detection. Select the most "
+    "useful analytical perspectives for the current news sample. Do not verify "
+    "with external retrieval; reason only from the text."
+)
+
+PERSPECTIVE_PLANNER_PROMPT = """
+## News Article
+{news_text}
+
+## Available Perspectives
+{perspective_catalog}
+
+## Task
+Select the top {top_k} perspectives that are most relevant for judging this article.
+Return strict JSON only, using this schema:
+{{
+  "selected_perspectives": [
+    {{"key": "perspective_key", "reason": "why this perspective is relevant", "priority": 1, "confidence": 0.0}}
+  ],
+  "planner_summary": "short risk summary"
+}}
+"""
+
+PERSPECTIVE_AGENT_SYSTEM = (
+    "You are {role_name}. Analyze fake-news risk from your own perspective. "
+    "You are not assigned a fixed REAL/FAKE side; you must report evidence for "
+    "both authenticity and falsity."
+)
+
+PERSPECTIVE_AGENT_PROMPT = """
+## News Article
+{news_text}
+
+## Planner Context
+{planner_summary}
+
+## Your Perspective
+Key: {perspective_key}
+Name: {role_name}
+Focus: {focus}
+
+## Task
+Produce a concise structured report with these fields:
+1. suspicious_points: concrete risk points from your perspective.
+2. arguments_for_real: reasons that support authenticity.
+3. arguments_for_fake: reasons that support falsity or manipulation.
+4. confidence: score from 0.0 to 1.0 for how diagnostic this perspective is.
+5. verdict_hint: one of real/fake/uncertain.
+
+Keep the analysis grounded in the article text and explicitly mark speculation.
+"""
+
+PERSPECTIVE_COORDINATOR_SYSTEM = (
+    "You are the Coordinator for a multi-perspective fake-news debate. Aggregate "
+    "specialist reports without letting fluency or role pressure dominate."
+)
+
+PERSPECTIVE_COORDINATOR_PROMPT = """
+## News Article
+{news_text}
+
+## Perspective Reports
+{perspective_reports}
+
+## Task
+Aggregate the reports into a balanced synthesis:
+1. Key accepted risk signals.
+2. Key authenticity-supporting signals.
+3. Cross-perspective conflicts or gaps.
+4. Perspective confidence weighting.
+5. Provisional label: real/fake/uncertain.
+6. Short rationale for the provisional label.
+"""
+
+SELF_REFLECTION_SYSTEM = (
+    "You are a self-reflective judge. Before producing a final decision, audit "
+    "the debate reliability, unsupported claims, contradictions, and uncertainty."
+)
+
+SELF_REFLECTION_PROMPT = """
+## News Article
+{news_text}
+
+## Coordinator Synthesis
+{coordinator_synthesis}
+
+## Perspective Reports
+{perspective_reports}
+
+## Task
+Perform a reliability audit before classification. Cover:
+1. factual_arguments: claims that are directly checkable from the text.
+2. subjective_or_speculative_arguments: claims that go beyond the text.
+3. contradictions: conflicts between reports or within the article.
+4. unanswered_points: important issues not resolved by the debate.
+5. hallucination_risk: arguments that may be invented or overconfident.
+6. uncertainty_sources: why the final conclusion may be uncertain.
+
+Then output:
+- reflective_label: real/fake/uncertain
+- confidence_score: 0.0 to 1.0
+- key_accepted_arguments
+- rejected_arguments
+"""
+
+ROLE_REVERSAL_SYSTEM = (
+    "You are a role-reversal consistency judge. Test whether the conclusion is "
+    "stable when the strongest REAL-supporting and FAKE-supporting arguments are "
+    "forced to argue the opposite side."
+)
+
+ROLE_REVERSAL_PROMPT = """
+## News Article
+{news_text}
+
+## Coordinator Synthesis
+{coordinator_synthesis}
+
+## Self-Reflective Audit
+{self_reflection}
+
+## Task
+Create a lightweight role-reversal consistency check:
+1. Reverse the strongest authenticity-supporting arguments into fake-supporting challenges.
+2. Reverse the strongest fake-supporting arguments into authenticity-supporting challenges.
+3. Judge whether the original conclusion remains stable.
+4. Assign consistency_score from 0.0 to 1.0.
+5. Explain whether confidence should be reduced and why.
+"""
+
+FINAL_JUDGE_SYSTEM = (
+    "You are the final judge for fake-news detection. Fuse the coordinator "
+    "synthesis, self-reflection audit, and role-reversal consistency check."
+)
+
+FINAL_JUDGE_PROMPT = """
+## News Article
+{news_text}
+
+## Coordinator Synthesis
+{coordinator_synthesis}
+
+## Self-Reflective Audit
+{self_reflection}
+
+## Role-Reversal Consistency
+{role_reversal}
+
+## Task
+Return the final judgment in a compact structured form.
+Important: this is a binary fake-news detection task, so final_label must be
+exactly one of real or fake. Do not output uncertain as final_label. If evidence
+is weak or mixed, choose the more likely label and reflect uncertainty through
+confidence_score and uncertainty_source.
+
+- final_label: real/fake
+- confidence_score: 0.0 to 1.0
+- consistency_adjustment: how role reversal changed confidence
+- key_accepted_arguments
+- rejected_arguments
+- uncertainty_source
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Prompt 格式化工具
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -292,3 +461,92 @@ def format_synthesis_prompt(
         opp_closing=opp_closing,
     )
     return SYNTHESIS_SYSTEM, prompt
+
+
+def format_perspective_planner_prompt(
+    news_text: str,
+    perspective_catalog: str,
+    top_k: int,
+) -> tuple[str, str]:
+    """格式化 Perspective Planner Prompt。"""
+    prompt = PERSPECTIVE_PLANNER_PROMPT.format(
+        news_text=news_text,
+        perspective_catalog=perspective_catalog,
+        top_k=top_k,
+    )
+    return PERSPECTIVE_PLANNER_SYSTEM, prompt
+
+
+def format_perspective_agent_prompt(
+    news_text: str,
+    perspective_key: str,
+    role_name: str,
+    focus: str,
+    planner_summary: str,
+) -> tuple[str, str]:
+    """格式化多视角专家 Prompt。"""
+    system_msg = PERSPECTIVE_AGENT_SYSTEM.format(role_name=role_name)
+    prompt = PERSPECTIVE_AGENT_PROMPT.format(
+        news_text=news_text,
+        perspective_key=perspective_key,
+        role_name=role_name,
+        focus=focus,
+        planner_summary=planner_summary,
+    )
+    return system_msg, prompt
+
+
+def format_perspective_coordinator_prompt(
+    news_text: str,
+    perspective_reports: str,
+) -> tuple[str, str]:
+    """格式化多视角聚合 Prompt。"""
+    prompt = PERSPECTIVE_COORDINATOR_PROMPT.format(
+        news_text=news_text,
+        perspective_reports=perspective_reports,
+    )
+    return PERSPECTIVE_COORDINATOR_SYSTEM, prompt
+
+
+def format_self_reflective_judge_prompt(
+    news_text: str,
+    coordinator_synthesis: str,
+    perspective_reports: str,
+) -> tuple[str, str]:
+    """格式化自反思裁判 Prompt。"""
+    prompt = SELF_REFLECTION_PROMPT.format(
+        news_text=news_text,
+        coordinator_synthesis=coordinator_synthesis,
+        perspective_reports=perspective_reports,
+    )
+    return SELF_REFLECTION_SYSTEM, prompt
+
+
+def format_role_reversal_prompt(
+    news_text: str,
+    coordinator_synthesis: str,
+    self_reflection: str,
+) -> tuple[str, str]:
+    """格式化角色反转一致性 Prompt。"""
+    prompt = ROLE_REVERSAL_PROMPT.format(
+        news_text=news_text,
+        coordinator_synthesis=coordinator_synthesis,
+        self_reflection=self_reflection,
+    )
+    return ROLE_REVERSAL_SYSTEM, prompt
+
+
+def format_final_judge_prompt(
+    news_text: str,
+    coordinator_synthesis: str,
+    self_reflection: str,
+    role_reversal: str,
+) -> tuple[str, str]:
+    """格式化最终裁判 Prompt。"""
+    prompt = FINAL_JUDGE_PROMPT.format(
+        news_text=news_text,
+        coordinator_synthesis=coordinator_synthesis,
+        self_reflection=self_reflection,
+        role_reversal=role_reversal,
+    )
+    return FINAL_JUDGE_SYSTEM, prompt

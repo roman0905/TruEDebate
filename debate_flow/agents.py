@@ -12,6 +12,7 @@ from debate_flow.prompts import (
     format_opening_prompt,
     format_cross_exam_prompt,
     format_closing_prompt,
+    format_perspective_agent_prompt,
 )
 import config
 
@@ -95,3 +96,51 @@ class DebateAgent(Agent):
 
     def __repr__(self) -> str:
         return f"DebateAgent(side={self.side}, role={self.role}, id={self.role_id})"
+
+
+class PerspectiveAgent(Agent):
+    """
+    多视角专家智能体。
+
+    与原始 TED 的正反方角色不同，该智能体不预设真假立场，而是从单一
+    误导风险维度同时给出支持真实和支持虚假的理由。
+    """
+
+    def __init__(
+        self,
+        model,
+        perspective_key: str,
+        role_name: str,
+        focus: str,
+        role_id: int,
+    ):
+        super().__init__(model)
+        self.perspective_key = perspective_key
+        self.role_name = role_name
+        self.focus = focus
+        self.role_id = role_id
+        self.report: str = ""
+
+    def step(self) -> None:
+        """调用 LLM 生成该视角的结构化分析报告。"""
+        system_msg, prompt = format_perspective_agent_prompt(
+            news_text=self.model.news_text,
+            perspective_key=self.perspective_key,
+            role_name=self.role_name,
+            focus=self.focus,
+            planner_summary=self.model.planner_summary,
+        )
+        logger.info(f"[{self.role_name}] 生成视角报告中...")
+        self.report = call_llm(prompt, system_msg)
+        logger.info(f"[{self.role_name}] 报告完成 ({len(self.report)} chars)")
+
+    @property
+    def speech(self) -> str:
+        """兼容图节点导出时的文本字段命名。"""
+        return self.report
+
+    def __repr__(self) -> str:
+        return (
+            f"PerspectiveAgent(key={self.perspective_key}, "
+            f"role={self.role_name}, id={self.role_id})"
+        )

@@ -115,6 +115,10 @@ def process_single_news(
     output_dir: Path,
     dataset: str,
     split: str,
+    debate_mode: str,
+    top_k_perspectives: int,
+    fixed_perspectives: bool,
+    enable_role_reversal: bool,
 ) -> str:
     """
     为一条新闻生成完整的辩论记录。
@@ -140,8 +144,14 @@ def process_single_news(
         return f"SKIP: {output_file.name}"
 
     try:
-        # 运行三阶段辩论 + Synthesis
-        debate_model = DebateModel(news_text)
+        # 运行 TED 或 Perspective-Adaptive 多智能体辩论
+        debate_model = DebateModel(
+            news_text,
+            debate_mode=debate_mode,
+            top_k_perspectives=top_k_perspectives,
+            fixed_perspectives=fixed_perspectives,
+            enable_role_reversal=enable_role_reversal,
+        )
         debate_model.step()
 
         # 导出辩论记录
@@ -154,10 +164,8 @@ def process_single_news(
             "label": label,
             "dataset": dataset,
             "split": split,
-            "nodes": debate_record["nodes"],
-            "edge_index": debate_record["edge_index"],
-            "synthesis": debate_record["synthesis"],
         }
+        output.update(debate_record)
 
         # 保存为 JSON
         with open(output_file, "w", encoding="utf-8") as f:
@@ -192,10 +200,35 @@ def main():
         "--max_samples", type=int, default=None,
         help="最多处理的样本数 (用于调试，默认全部处理)"
     )
+    parser.add_argument(
+        "--debate_mode", type=str, default=config.DEFAULT_DEBATE_MODE,
+        choices=["ted", "perspective"],
+        help="辩论框架: ted=原始正反方, perspective=自适应多视角"
+    )
+    parser.add_argument(
+        "--top_k_perspectives", type=int, default=config.DEFAULT_PERSPECTIVE_TOP_K,
+        help="Perspective Planner 最多选择的视角数量"
+    )
+    parser.add_argument(
+        "--fixed_perspectives", action="store_true",
+        help="固定使用前 K 个视角，不调用 Planner 自适应选择，用于消融实验"
+    )
+    parser.add_argument(
+        "--no_role_reversal", action="store_true",
+        help="禁用角色反转一致性检查，用于消融实验"
+    )
+    parser.add_argument(
+        "--output_suffix", type=str, default=None,
+        help="输出目录后缀；默认 perspective 使用 _pamd，ted 不加后缀"
+    )
     args = parser.parse_args()
 
     # 创建输出目录
-    output_dir = config.OUTPUT_DIR / f"{args.dataset}_{args.split}"
+    if args.output_suffix is None:
+        output_suffix = "_pamd" if args.debate_mode == "perspective" else ""
+    else:
+        output_suffix = args.output_suffix
+    output_dir = config.OUTPUT_DIR / f"{args.dataset}_{args.split}{output_suffix}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 加载数据集
@@ -208,7 +241,10 @@ def main():
 
     logger.info(
         f"开始生成辩论记录: dataset={args.dataset}, split={args.split}, "
-        f"samples={len(records)}, workers={args.max_workers}"
+        f"samples={len(records)}, workers={args.max_workers}, "
+        f"mode={args.debate_mode}, top_k={args.top_k_perspectives}, "
+        f"fixed_perspectives={args.fixed_perspectives}, "
+        f"role_reversal={not args.no_role_reversal}"
     )
 
     # 多线程并发处理
@@ -217,7 +253,15 @@ def main():
     with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
         futures = {
             executor.submit(
-                process_single_news, item, output_dir, args.dataset, args.split
+                process_single_news,
+                item,
+                output_dir,
+                args.dataset,
+                args.split,
+                args.debate_mode,
+                args.top_k_perspectives,
+                args.fixed_perspectives,
+                not args.no_role_reversal,
             ): item["id"]
             for item in records
         }
