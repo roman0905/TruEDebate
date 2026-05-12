@@ -249,12 +249,10 @@ class TEDClassifier(nn.Module):
         #         / global_mean / persp_max / cross_attn / |news-persp| / news*persp
         # 共 10 * proj_dim 维。
         combined_dim = proj_dim * 10
+        self.combined_dim = combined_dim
+        # V5：减一层 MLP，降低头部容量（V4 五层 → 三层），缓解过拟合。
         self.classifier = nn.Sequential(
-            nn.Linear(combined_dim, proj_dim * 2),
-            nn.LayerNorm(proj_dim * 2),
-            nn.GELU(),
-            nn.Dropout(config.CLASSIFIER_DROPOUT),
-            nn.Linear(proj_dim * 2, proj_dim),
+            nn.Linear(combined_dim, proj_dim),
             nn.LayerNorm(proj_dim),
             nn.GELU(),
             nn.Dropout(config.CLASSIFIER_DROPOUT),
@@ -350,6 +348,8 @@ class TEDClassifier(nn.Module):
         news_input_ids: torch.Tensor,
         news_attention_mask: torch.Tensor,
         return_aux: bool = False,
+        return_features: bool = False,
+        mixup_features: torch.Tensor | None = None,
     ):
         # ── 1. Role-aware Encoder ──
         node_text_features = self._encode_texts(node_input_ids, node_attention_mask)
@@ -457,20 +457,29 @@ class TEDClassifier(nn.Module):
             ],
             dim=-1,
         )
+
+        # V5：Mixup 直接替换 combined（外层负责混合 features 和 labels）。
+        if mixup_features is not None:
+            combined = mixup_features
+
         logits = self.classifier(combined)                          # [B, 2]
 
+        if return_features and not return_aux:
+            return logits, combined
+
         if return_aux and self.use_aux_loss:
-            # 仅对 perspective 节点产出辅助 logits。
-            persp_indices = persp_mask.nonzero(as_tuple=False)      # [K, 2]: (b, n)
+            persp_indices = persp_mask.nonzero(as_tuple=False)
             if persp_indices.numel() == 0:
                 aux_logits = logits.new_zeros((0, 2))
                 aux_batch_ids = torch.empty(0, dtype=torch.long, device=logits.device)
             else:
                 b_idx = persp_indices[:, 0]
                 n_idx = persp_indices[:, 1]
-                persp_feats = dense_nodes[b_idx, n_idx]             # [K, D]
-                aux_logits = self.aux_head(persp_feats)             # [K, 2]
+                persp_feats = dense_nodes[b_idx, n_idx]
+                aux_logits = self.aux_head(persp_feats)
                 aux_batch_ids = b_idx
+            if return_features:
+                return logits, aux_logits, aux_batch_ids, combined
             return logits, aux_logits, aux_batch_ids
 
         return logits

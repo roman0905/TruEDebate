@@ -1,17 +1,20 @@
 """
-TruEDebate (TED/PAMD) — 训练循环、验证与评估（创新版本）
+TruEDebate (TED/PAMD) — 训练循环、验证与评估（V5 版本）
 
-相对原始实现的核心改进：
-1. 主损失支持 Focal Loss + 类别权重，针对 F1_fake 偏低。
-2. Perspective 节点的辅助分类损失（multi-task）。
-3. SWA：训练后期对模型权重做平均（torch.optim.swa_utils.AveragedModel）。
-4. 验证集阈值调优：扫描 fake 类阈值最大化 macF1，应用到测试集。
-5. 评估返回 probs/labels 供阈值搜索复用。
+V5 相对 V4 的修复（基于 V4 训练 log 复盘）：
+1. 去掉 Focal Loss × class_weight 双重加权（V4 5 epoch 即过拟合）。
+2. 引入 sqrt 模式类别权重，缓解 train/val 类比例失配。
+3. 每个 epoch 都做阈值调优，用 tuned macF1 选 best_model。
+4. 修复 SWA 时机：start_ratio 0.6 → 0.3 + patience 8 → 12，确保真正触发。
+5. 引入 EMA 全程影子模型，最终在 best / EMA / SWA 三者间取最优。
+6. 引入 Manifold Mixup（在 classifier 输入做混合），强正则化。
+7. 区分 BERT / 其他参数的 weight_decay，加强头部正则。
 """
 
 import json
 import logging
 import math
+import random
 from copy import deepcopy
 from pathlib import Path
 
@@ -40,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 class FocalLoss(nn.Module):
-    """支持类别权重的 Focal Loss。"""
+    """支持类别权重的 Focal Loss。V5 默认关闭（与 class_weight 叠加会过冲）。"""
 
     def __init__(
         self,
@@ -89,11 +92,42 @@ class FocalLoss(nn.Module):
         return loss
 
 
+# ──────────────────────────────── EMA ────────────────────────────────
+
+
+class ModelEMA:
+    """模型参数的指数滑动平均影子。V5 新增：全程维护，结束后与 best/SWA 三选一。"""
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow: dict[str, torch.Tensor] = {
+            k: v.detach().clone() for k, v in model.state_dict().items()
+        }
+        self.num_updates = 0
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        self.num_updates += 1
+        # 前期 warmup：1 - 1/(n+1)，避免初始几步剧烈震荡。
+        effective_decay = min(self.decay, (self.num_updates + 1) / (10 + self.num_updates))
+        for k, v in model.state_dict().items():
+            shadow = self.shadow[k]
+            if v.dtype.is_floating_point:
+                shadow.mul_(effective_decay).add_(v.detach(), alpha=1.0 - effective_decay)
+            else:
+                shadow.copy_(v.detach())
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        return self.shadow
+
+    def apply_to(self, model: nn.Module) -> None:
+        model.load_state_dict(self.shadow)
+
+
 # ──────────────────────────────── 前向 helper ────────────────────────────────
 
 
 def _extract_batch(batch_data, labels_required: bool = True):
-    """统一从 PyG batch 里取出 forward 所需字段。"""
     node_input_ids = batch_data.node_input_ids
     node_attention_mask = batch_data.node_attention_mask
     role_ids = batch_data.role_ids
@@ -106,7 +140,6 @@ def _extract_batch(batch_data, labels_required: bool = True):
     news_attention_mask = batch_data.news_attention_mask
     labels = batch_data.y if labels_required else None
 
-    # PyG 的 batching 可能把 [1, seq_len] news 拼成 [bs, seq_len]，这里做一致性矫正。
     if labels is not None and news_input_ids.dim() == 2 and news_input_ids.shape[0] != labels.shape[0]:
         bs = labels.shape[0]
         seq_len = news_input_ids.shape[-1]
@@ -128,27 +161,7 @@ def _extract_batch(batch_data, labels_required: bool = True):
     }
 
 
-def _call_model(model: nn.Module, fields: dict, return_aux: bool = False):
-    aux_supported = isinstance(model, TEDClassifier) and getattr(model, "use_aux_loss", False)
-    # SWA AveragedModel 把真正的模块包在 .module 里。
-    real = model.module if hasattr(model, "module") else model
-    aux_supported = aux_supported or (
-        isinstance(real, TEDClassifier) and getattr(real, "use_aux_loss", False)
-    )
-    if return_aux and aux_supported:
-        return model(
-            node_input_ids=fields["node_input_ids"],
-            node_attention_mask=fields["node_attention_mask"],
-            role_ids=fields["role_ids"],
-            node_group_ids=fields["node_group_ids"],
-            numeric_features=fields["numeric_features"],
-            edge_index=fields["edge_index"],
-            edge_type=fields["edge_type"],
-            batch=fields["batch"],
-            news_input_ids=fields["news_input_ids"],
-            news_attention_mask=fields["news_attention_mask"],
-            return_aux=True,
-        )
+def _call_model(model: nn.Module, fields: dict, **forward_kwargs):
     return model(
         node_input_ids=fields["node_input_ids"],
         node_attention_mask=fields["node_attention_mask"],
@@ -160,7 +173,13 @@ def _call_model(model: nn.Module, fields: dict, return_aux: bool = False):
         batch=fields["batch"],
         news_input_ids=fields["news_input_ids"],
         news_attention_mask=fields["news_attention_mask"],
+        **forward_kwargs,
     )
+
+
+def _underlying(model: nn.Module) -> nn.Module:
+    """剥离 SWA/EMA 等包装拿到真模型，便于读 use_aux_loss 等属性。"""
+    return model.module if hasattr(model, "module") else model
 
 
 # ──────────────────────────────── 训练循环 ────────────────────────────────
@@ -177,39 +196,67 @@ def train_one_epoch(
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     grad_clip_max_norm: float = config.GRAD_CLIP_MAX_NORM,
     aux_loss_weight: float = 0.0,
+    use_mixup: bool = False,
+    mixup_alpha: float = config.MIXUP_ALPHA,
+    mixup_prob: float = config.MIXUP_PROB,
+    ema: ModelEMA | None = None,
 ) -> float:
     model.train()
     total_loss = 0.0
     num_batches = 0
     optimizer.zero_grad()
 
+    use_aux = aux_loss_weight > 0 and getattr(model, "use_aux_loss", False)
+    use_amp = scaler is not None
+
     for step, batch_data in enumerate(loader):
         batch_data = batch_data.to(device)
         fields = _extract_batch(batch_data)
         labels = fields["labels"]
+        apply_mixup_now = use_mixup and (random.random() < mixup_prob) and labels.size(0) > 1
 
-        use_amp = scaler is not None
-
-        def _forward_and_loss():
-            if aux_loss_weight > 0 and getattr(model, "use_aux_loss", False):
-                logits, aux_logits, aux_batch_ids = _call_model(model, fields, return_aux=True)
+        def _compute_loss():
+            if apply_mixup_now:
+                # Manifold Mixup：在分类器输入处混合两条样本的拼接特征。
+                logits, features = _call_model(model, fields, return_features=True)
+                # 同时计算正常的 aux 损失（无 mixup），保留视角监督。
+                main_loss = criterion(logits, labels)
+                if use_aux:
+                    # 取 aux 信号，需要额外把 features 解构得到 dense_nodes；
+                    # 简化处理：mixup 批次只用主损失 + mixed loss，不再附加 aux。
+                    pass
+                # 生成 mixup 排列
+                perm = torch.randperm(features.size(0), device=features.device)
+                lam = float(np.random.beta(mixup_alpha, mixup_alpha))
+                mixed = lam * features + (1.0 - lam) * features[perm]
+                # 用同样的分类头计算混合后的 logits。
+                real_model = _underlying(model)
+                mixed_logits = real_model.classifier(mixed)
+                mixed_loss = (
+                    lam * criterion(mixed_logits, labels)
+                    + (1.0 - lam) * criterion(mixed_logits, labels[perm])
+                )
+                return 0.5 * main_loss + 0.5 * mixed_loss
+            # 非 mixup 路径：常规 + aux
+            if use_aux:
+                logits, aux_logits, aux_batch_ids = _call_model(
+                    model, fields, return_aux=True
+                )
                 main_loss = criterion(logits, labels)
                 if aux_logits.numel() > 0:
                     aux_labels = labels[aux_batch_ids]
                     aux_loss = criterion(aux_logits, aux_labels)
-                    total = main_loss + aux_loss_weight * aux_loss
-                else:
-                    total = main_loss
-                return total
+                    return main_loss + aux_loss_weight * aux_loss
+                return main_loss
             logits = _call_model(model, fields)
             return criterion(logits, labels)
 
         if use_amp:
             with autocast(str(device).split(":")[0]):
-                loss = _forward_and_loss() / grad_accum_steps
+                loss = _compute_loss() / grad_accum_steps
             scaler.scale(loss).backward()
         else:
-            loss = _forward_and_loss() / grad_accum_steps
+            loss = _compute_loss() / grad_accum_steps
             loss.backward()
 
         if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(loader):
@@ -226,6 +273,9 @@ def train_one_epoch(
             if scheduler is not None:
                 scheduler.step()
             optimizer.zero_grad()
+            # EMA 在每个 optimizer.step 之后更新。
+            if ema is not None:
+                ema.update(model)
 
         total_loss += loss.item() * grad_accum_steps
         num_batches += 1
@@ -243,7 +293,6 @@ def collect_predictions(
     criterion: nn.Module,
     device: torch.device,
 ) -> dict:
-    """收集预测概率与 loss，方便阈值调优。"""
     model.eval()
     total_loss = 0.0
     all_probs = []
@@ -334,10 +383,19 @@ def search_best_threshold(
     return best_th, best_f1
 
 
-# ──────────────────────────────── 主训练流程 ────────────────────────────────
+# ──────────────────────────────── 类别权重 ────────────────────────────────
 
 
-def _compute_class_weights(loader: DataLoader, device: torch.device) -> torch.Tensor:
+def _compute_class_weights(
+    loader: DataLoader,
+    device: torch.device,
+    mode: str = "inverse",
+) -> torch.Tensor:
+    """根据 mode 计算类别权重。
+    - inverse: total / (2*counts)，最强；
+    - sqrt:    sqrt(total / (2*counts))，温和；
+    - balanced: 全 1.0。
+    """
     labels = []
     dataset = loader.dataset
     file_paths = getattr(dataset, "file_paths", None)
@@ -355,7 +413,13 @@ def _compute_class_weights(loader: DataLoader, device: torch.device) -> torch.Te
 
     counts = np.bincount(np.array(labels, dtype=np.int64), minlength=2)
     total = max(int(counts.sum()), 1)
-    weights = total / (2.0 * np.maximum(counts, 1))
+    inv = total / (2.0 * np.maximum(counts, 1))
+    if mode == "balanced":
+        weights = np.ones_like(inv)
+    elif mode == "sqrt":
+        weights = np.sqrt(inv)
+    else:
+        weights = inv
     return torch.tensor(weights, dtype=torch.float, device=device)
 
 
@@ -379,6 +443,9 @@ def _build_warmup_cosine_scheduler(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
+# ──────────────────────────────── 主训练流程 ────────────────────────────────
+
+
 def train(
     model: TEDClassifier,
     train_loader: DataLoader,
@@ -400,10 +467,12 @@ def train(
     # 类别权重
     class_weights = None
     if config.USE_CLASS_WEIGHT:
-        class_weights = _compute_class_weights(train_loader, device)
+        class_weights = _compute_class_weights(
+            train_loader, device, mode=config.CLASS_WEIGHT_MODE
+        )
         logger.info(
-            f"类别权重启用: real={class_weights[0].item():.4f}, "
-            f"fake={class_weights[1].item():.4f}"
+            f"类别权重 (mode={config.CLASS_WEIGHT_MODE}): "
+            f"real={class_weights[0].item():.4f}, fake={class_weights[1].item():.4f}"
         )
 
     # 主损失
@@ -425,7 +494,7 @@ def train(
             f"主损失: CrossEntropy(label_smoothing={config.LABEL_SMOOTHING})"
         )
 
-    # 优化器
+    # 优化器：BERT 和其他参数分别用不同 LR 和 WD。
     bert_params, other_params = [], []
     for name, param in model.named_parameters():
         if param.requires_grad:
@@ -435,10 +504,9 @@ def train(
                 other_params.append(param)
     optimizer = torch.optim.AdamW(
         [
-            {"params": bert_params, "lr": lr * config.BERT_LR_FACTOR},
-            {"params": other_params, "lr": lr},
+            {"params": bert_params, "lr": lr * config.BERT_LR_FACTOR, "weight_decay": weight_decay},
+            {"params": other_params, "lr": lr, "weight_decay": config.WEIGHT_DECAY_OTHER},
         ],
-        weight_decay=weight_decay,
     )
 
     steps_per_epoch = math.ceil(len(train_loader) / max(grad_accum_steps, 1))
@@ -446,14 +514,20 @@ def train(
     scheduler = _build_warmup_cosine_scheduler(optimizer, total_steps)
     scaler = GradScaler(str(device)) if (use_amp and device.type == "cuda") else None
 
+    # EMA
+    ema = ModelEMA(model, decay=config.EMA_DECAY) if config.USE_EMA else None
+
     # SWA
     swa_model = None
-    swa_start_epoch = int(epochs * config.SWA_START_RATIO)
+    swa_start_epoch = max(int(epochs * config.SWA_START_RATIO), 1)
 
     best_val_f1 = -1.0
     best_metrics: dict = {}
+    best_threshold = 0.5
     patience_counter = 0
+
     aux_weight = config.AUX_LOSS_WEIGHT if getattr(model, "use_aux_loss", False) else 0.0
+    use_mixup = config.USE_MIXUP
 
     logger.info(f"开始训练: {epochs} epochs, device={device}, AMP={use_amp}")
     logger.info(f"BERT 可训练参数: {sum(p.numel() for p in bert_params):,}")
@@ -463,15 +537,20 @@ def train(
         f"warmup_steps={int(total_steps * config.WARMUP_RATIO)}, "
         f"min_lr_ratio={config.MIN_LR_RATIO}"
     )
+    logger.info(f"WeightDecay: bert={weight_decay}, other={config.WEIGHT_DECAY_OTHER}")
     logger.info(f"Early stopping patience: {config.EARLY_STOPPING_PATIENCE}")
     logger.info(f"Aux loss weight: {aux_weight}")
     logger.info(f"Node dropout: {config.NODE_DROPOUT_P}, Edge dropout: {config.EDGE_DROPOUT_P}")
     logger.info(
-        f"SWA: enabled={config.USE_SWA}, start_epoch={swa_start_epoch}"
+        f"Mixup: enabled={use_mixup}, alpha={config.MIXUP_ALPHA}, prob={config.MIXUP_PROB}"
     )
     logger.info(
-        f"Threshold tuning: enabled={config.USE_THRESHOLD_TUNING}"
+        f"EMA: enabled={config.USE_EMA}, decay={config.EMA_DECAY}"
     )
+    logger.info(
+        f"SWA: enabled={config.USE_SWA}, start_epoch={swa_start_epoch}"
+    )
+    logger.info(f"Threshold tuning: enabled={config.USE_THRESHOLD_TUNING}")
     logger.info(f"Grad clip max norm: {config.GRAD_CLIP_MAX_NORM}")
 
     for epoch in range(1, epochs + 1):
@@ -479,11 +558,23 @@ def train(
             model, train_loader, optimizer, criterion, device, scaler,
             grad_accum_steps=grad_accum_steps, scheduler=scheduler,
             aux_loss_weight=aux_weight,
+            use_mixup=use_mixup,
+            ema=ema,
         )
 
+        # ── 验证：原始模型 ──
         val_pack = collect_predictions(model, val_loader, criterion, device)
-        val_metrics = metrics_from_probs(val_pack["probs"], val_pack["labels"], threshold=0.5)
+        if config.USE_THRESHOLD_TUNING:
+            val_thr, val_tuned_f1 = search_best_threshold(val_pack["probs"], val_pack["labels"])
+        else:
+            val_thr = 0.5
+        val_metrics = metrics_from_probs(
+            val_pack["probs"], val_pack["labels"], threshold=val_thr
+        )
+        val_metrics_05 = metrics_from_probs(val_pack["probs"], val_pack["labels"], threshold=0.5)
         val_metrics["loss"] = val_pack["loss"]
+        val_metrics["raw_macro_f1"] = val_metrics_05["macro_f1"]
+        val_metrics["raw_f1_fake"] = val_metrics_05["f1_fake"]
 
         # SWA 累积
         if config.USE_SWA and epoch >= swa_start_epoch:
@@ -498,30 +589,34 @@ def train(
             f"Train Loss: {train_loss:.4f} | "
             f"Val Loss: {val_metrics['loss']:.4f} | "
             f"Val Acc: {val_metrics['accuracy']:.4f} | "
-            f"Val macF1: {val_metrics['macro_f1']:.4f} | "
-            f"Val F1_real: {val_metrics['f1_real']:.4f} | "
-            f"Val F1_fake: {val_metrics['f1_fake']:.4f} | "
+            f"Tuned macF1: {val_metrics['macro_f1']:.4f} (thr={val_thr:.3f}) | "
+            f"Raw macF1: {val_metrics['raw_macro_f1']:.4f} | "
+            f"F1_real: {val_metrics['f1_real']:.4f} | F1_fake: {val_metrics['f1_fake']:.4f} | "
             f"Fake P/R: {val_metrics['fake_precision']:.4f}/"
             f"{val_metrics['fake_recall']:.4f} | "
             f"Pred fake: {val_metrics['pred_fake']}/{val_metrics['true_fake']}"
         )
 
+        # 选 best（基于 tuned macF1）
         if val_metrics["macro_f1"] > best_val_f1:
             best_val_f1 = val_metrics["macro_f1"]
             best_metrics = val_metrics.copy()
             best_metrics["epoch"] = epoch
             best_metrics["val_probs"] = val_pack["probs"]
             best_metrics["val_labels"] = val_pack["labels"]
+            best_threshold = val_thr
 
-            save_path = checkpoint_dir / "best_model.pt"
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
+                "threshold": val_thr,
                 "val_metrics": {k: v for k, v in val_metrics.items() if not isinstance(v, np.ndarray)},
-            }, save_path)
-            logger.info(f"  ★ 最佳模型已保存 (macF1={best_val_f1:.4f})")
+            }, checkpoint_dir / "best_model.pt")
+            logger.info(
+                f"  ★ 最佳模型已保存 (tuned macF1={best_val_f1:.4f}, thr={val_thr:.3f})"
+            )
             patience_counter = 0
         else:
             patience_counter += 1
@@ -531,62 +626,74 @@ def train(
                 )
                 break
 
-    # ── SWA 评估并与最优 best_model 比较 ──
-    swa_better = False
-    if swa_model is not None:
-        logger.info("评估 SWA 模型…")
-        swa_val_pack = collect_predictions(swa_model, val_loader, criterion, device)
-        swa_val_metrics = metrics_from_probs(swa_val_pack["probs"], swa_val_pack["labels"], threshold=0.5)
-        swa_val_metrics["loss"] = swa_val_pack["loss"]
-        logger.info(
-            f"SWA Val | Loss: {swa_val_metrics['loss']:.4f} | "
-            f"Acc: {swa_val_metrics['accuracy']:.4f} | "
-            f"macF1: {swa_val_metrics['macro_f1']:.4f} | "
-            f"F1_fake: {swa_val_metrics['f1_fake']:.4f}"
-        )
-        if swa_val_metrics["macro_f1"] > best_val_f1:
-            logger.info(
-                f"  ✦ SWA 优于 best_model (Δ macF1 = {swa_val_metrics['macro_f1'] - best_val_f1:.4f})，"
-                "将使用 SWA 模型作最终预测。"
-            )
-            best_val_f1 = swa_val_metrics["macro_f1"]
-            best_metrics = swa_val_metrics.copy()
-            best_metrics["epoch"] = "swa"
-            best_metrics["val_probs"] = swa_val_pack["probs"]
-            best_metrics["val_labels"] = swa_val_pack["labels"]
-            swa_better = True
-            torch.save({
-                "epoch": "swa",
-                "model_state_dict": swa_model.state_dict(),
-                "val_metrics": {k: v for k, v in swa_val_metrics.items() if not isinstance(v, np.ndarray)},
-            }, checkpoint_dir / "swa_model.pt")
+    # ── 后训练：评估 EMA 和 SWA ──
+    candidates = {"best": (best_val_f1, best_threshold, "best_model.pt")}
 
-    # ── 阈值调优 ──
-    best_threshold = 0.5
-    if config.USE_THRESHOLD_TUNING and "val_probs" in best_metrics:
-        best_threshold, tuned_f1 = search_best_threshold(
-            best_metrics["val_probs"], best_metrics["val_labels"]
+    if ema is not None:
+        # 创建一个临时副本评估 EMA
+        ema_state_backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        ema.apply_to(model)
+        ema_pack = collect_predictions(model, val_loader, criterion, device)
+        ema_thr, _ = (
+            search_best_threshold(ema_pack["probs"], ema_pack["labels"])
+            if config.USE_THRESHOLD_TUNING else (0.5, 0.0)
         )
-        tuned_val = metrics_from_probs(
-            best_metrics["val_probs"], best_metrics["val_labels"], threshold=best_threshold
-        )
+        ema_metrics = metrics_from_probs(ema_pack["probs"], ema_pack["labels"], threshold=ema_thr)
+        ema_metrics["loss"] = ema_pack["loss"]
+        ema_metrics["raw_macro_f1"] = metrics_from_probs(
+            ema_pack["probs"], ema_pack["labels"], 0.5
+        )["macro_f1"]
         logger.info(
-            f"阈值调优: best_threshold={best_threshold:.3f} | "
-            f"tuned Val macF1: {tuned_val['macro_f1']:.4f} | "
-            f"F1_fake: {tuned_val['f1_fake']:.4f} | "
-            f"Fake P/R: {tuned_val['fake_precision']:.4f}/{tuned_val['fake_recall']:.4f}"
+            f"EMA Val | Tuned macF1: {ema_metrics['macro_f1']:.4f} (thr={ema_thr:.3f}) | "
+            f"Raw macF1: {ema_metrics['raw_macro_f1']:.4f} | "
+            f"F1_fake: {ema_metrics['f1_fake']:.4f}"
         )
-        # 用调优后的指标覆盖 best_metrics（不影响 epoch 字段）
-        for k, v in tuned_val.items():
-            best_metrics[k] = v
-        best_metrics["threshold"] = best_threshold
+        torch.save({
+            "model_state_dict": ema.state_dict(),
+            "threshold": ema_thr,
+            "val_metrics": ema_metrics,
+        }, checkpoint_dir / "ema_model.pt")
+        candidates["ema"] = (ema_metrics["macro_f1"], ema_thr, "ema_model.pt")
+        # 恢复模型权重，避免影响后续 SWA 比较
+        model.load_state_dict(ema_state_backup)
+
+    if swa_model is not None:
+        swa_pack = collect_predictions(swa_model, val_loader, criterion, device)
+        swa_thr, _ = (
+            search_best_threshold(swa_pack["probs"], swa_pack["labels"])
+            if config.USE_THRESHOLD_TUNING else (0.5, 0.0)
+        )
+        swa_metrics = metrics_from_probs(swa_pack["probs"], swa_pack["labels"], threshold=swa_thr)
+        swa_metrics["loss"] = swa_pack["loss"]
+        swa_metrics["raw_macro_f1"] = metrics_from_probs(
+            swa_pack["probs"], swa_pack["labels"], 0.5
+        )["macro_f1"]
+        logger.info(
+            f"SWA Val | Tuned macF1: {swa_metrics['macro_f1']:.4f} (thr={swa_thr:.3f}) | "
+            f"Raw macF1: {swa_metrics['raw_macro_f1']:.4f} | "
+            f"F1_fake: {swa_metrics['f1_fake']:.4f}"
+        )
+        torch.save({
+            "model_state_dict": swa_model.state_dict(),
+            "threshold": swa_thr,
+            "val_metrics": swa_metrics,
+        }, checkpoint_dir / "swa_model.pt")
+        candidates["swa"] = (swa_metrics["macro_f1"], swa_thr, "swa_model.pt")
+
+    # 选最佳 candidate
+    winner_name = max(candidates.keys(), key=lambda k: candidates[k][0])
+    winner_f1, winner_thr, winner_ckpt = candidates[winner_name]
+    logger.info(
+        f"最终模型选择: {winner_name} (Val macF1={winner_f1:.4f}, thr={winner_thr:.3f})"
+    )
 
     # ── 测试集评估 ──
     if test_loader is not None:
-        # 选用模型：SWA 或 最佳 epoch
-        if swa_better and swa_model is not None:
+        if winner_name == "swa" and swa_model is not None:
             test_model = swa_model
-            logger.info("使用 SWA 模型评估测试集。")
+        elif winner_name == "ema" and ema is not None:
+            ema.apply_to(model)
+            test_model = model
         else:
             best_ckpt = torch.load(
                 checkpoint_dir / "best_model.pt",
@@ -595,20 +702,18 @@ def train(
             )
             model.load_state_dict(best_ckpt["model_state_dict"])
             test_model = model
-            logger.info(f"使用 best epoch={best_ckpt['epoch']} 模型评估测试集。")
 
         test_pack = collect_predictions(test_model, test_loader, criterion, device)
         test_metrics = metrics_from_probs(
-            test_pack["probs"], test_pack["labels"], threshold=best_threshold
+            test_pack["probs"], test_pack["labels"], threshold=winner_thr
         )
         test_metrics["loss"] = test_pack["loss"]
-        # 同时记录默认阈值 0.5 的结果
         test_metrics_05 = metrics_from_probs(
             test_pack["probs"], test_pack["labels"], threshold=0.5
         )
 
         logger.info("=" * 60)
-        logger.info(f"测试集结果 (阈值={best_threshold:.3f}):")
+        logger.info(f"测试集结果 ({winner_name} 模型，阈值={winner_thr:.3f}):")
         logger.info(f"  Accuracy:  {test_metrics['accuracy']:.4f}")
         logger.info(f"  Macro F1:  {test_metrics['macro_f1']:.4f}")
         logger.info(f"  F1 (Real): {test_metrics['f1_real']:.4f}")
@@ -628,8 +733,9 @@ def train(
         logger.info("=" * 60)
         best_metrics["test"] = test_metrics
         best_metrics["test_at_0_5"] = test_metrics_05
+        best_metrics["winner"] = winner_name
+        best_metrics["winner_threshold"] = winner_thr
 
-    # 去掉不可序列化字段，再写出
     serializable = {}
     for k, v in best_metrics.items():
         if isinstance(v, np.ndarray):

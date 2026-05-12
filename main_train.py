@@ -115,6 +115,43 @@ def main():
         help="覆盖 Focal Loss 的 gamma"
     )
     parser.add_argument(
+        "--no_mixup", action="store_true",
+        help="禁用 Manifold Mixup"
+    )
+    parser.add_argument(
+        "--mixup_alpha", type=float, default=None,
+        help="覆盖 Mixup Beta 分布 alpha"
+    )
+    parser.add_argument(
+        "--mixup_prob", type=float, default=None,
+        help="覆盖每个 batch 应用 Mixup 的概率"
+    )
+    parser.add_argument(
+        "--no_ema", action="store_true",
+        help="禁用 EMA 影子模型"
+    )
+    parser.add_argument(
+        "--ema_decay", type=float, default=None,
+        help="覆盖 EMA decay"
+    )
+    parser.add_argument(
+        "--class_weight_mode", type=str, default=None,
+        choices=["inverse", "sqrt", "balanced"],
+        help="类别权重模式（V5 默认 sqrt）"
+    )
+    parser.add_argument(
+        "--patience", type=int, default=None,
+        help="覆盖 early stopping patience"
+    )
+    parser.add_argument(
+        "--swa_start_ratio", type=float, default=None,
+        help="覆盖 SWA 启动比例"
+    )
+    parser.add_argument(
+        "--weight_decay_other", type=float, default=None,
+        help="覆盖非 BERT 参数的 weight_decay"
+    )
+    parser.add_argument(
         "--no_typed_edges", action="store_true",
         help="禁用 edge_type 边类型嵌入，用于消融实验"
     )
@@ -144,6 +181,24 @@ def main():
         config.USE_THRESHOLD_TUNING = False
     if args.focal_gamma is not None:
         config.FOCAL_LOSS_GAMMA = args.focal_gamma
+    if args.no_mixup:
+        config.USE_MIXUP = False
+    if args.mixup_alpha is not None:
+        config.MIXUP_ALPHA = args.mixup_alpha
+    if args.mixup_prob is not None:
+        config.MIXUP_PROB = args.mixup_prob
+    if args.no_ema:
+        config.USE_EMA = False
+    if args.ema_decay is not None:
+        config.EMA_DECAY = args.ema_decay
+    if args.class_weight_mode is not None:
+        config.CLASS_WEIGHT_MODE = args.class_weight_mode
+    if args.patience is not None:
+        config.EARLY_STOPPING_PATIENCE = args.patience
+    if args.swa_start_ratio is not None:
+        config.SWA_START_RATIO = args.swa_start_ratio
+    if args.weight_decay_other is not None:
+        config.WEIGHT_DECAY_OTHER = args.weight_decay_other
 
     set_seed(args.seed)
 
@@ -239,8 +294,13 @@ def main():
     logger.info(f"  Aux Loss:    {config.USE_AUX_LOSS} (weight={config.AUX_LOSS_WEIGHT})")
     logger.info(f"  Node DropP:  {config.NODE_DROPOUT_P}")
     logger.info(f"  Edge DropP:  {config.EDGE_DROPOUT_P}")
+    logger.info(f"  Mixup:       {config.USE_MIXUP} (alpha={config.MIXUP_ALPHA}, prob={config.MIXUP_PROB})")
+    logger.info(f"  EMA:         {config.USE_EMA} (decay={config.EMA_DECAY})")
     logger.info(f"  SWA:         {config.USE_SWA} (start_ratio={config.SWA_START_RATIO})")
     logger.info(f"  ThreshTune:  {config.USE_THRESHOLD_TUNING}")
+    logger.info(f"  ClassWeight: mode={config.CLASS_WEIGHT_MODE}")
+    logger.info(f"  WD other:    {config.WEIGHT_DECAY_OTHER}")
+    logger.info(f"  Patience:    {config.EARLY_STOPPING_PATIENCE}")
     logger.info("=" * 60)
 
     # 更新全局梯度累积配置

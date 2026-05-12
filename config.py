@@ -197,21 +197,40 @@ NODE_DROPOUT_P = 0.15
 EDGE_DROPOUT_P = 0.1
 # 是否在分类头里加入 perspective 节点辅助分类损失（multi-task）。
 USE_AUX_LOSS = True
-AUX_LOSS_WEIGHT = 0.3
+# V5 修复：从 0.3 降到 0.15，减轻 aux 对主任务的扰动。
+AUX_LOSS_WEIGHT = 0.15
 
-# Focal Loss：替代 CE+label_smoothing，针对 F1_fake 偏低。
-USE_FOCAL_LOSS = True
+# Focal Loss：V4 实验显示 Focal × class_weight 叠加导致梯度过冲，5 epoch 即过拟合。
+# V5 默认关闭，退回 CE+class_weight+label_smoothing。
+USE_FOCAL_LOSS = False
 FOCAL_LOSS_GAMMA = 2.0
 
-# R-Drop 一致性损失：默认关闭，需要 2x 前向，可在最终阶段启用。
+# 类别权重模式：
+#   "inverse"  —— total/(2*counts)，会给少数类放大 ~2.86×，与 Focal 叠加会过冲；
+#   "sqrt"     —— sqrt(total/counts)/normalize，温和的少数类加权 (~1.4×)；
+#   "balanced" —— 直接 [1.0, 1.0]，禁用类权重，让 Focal 单独处理。
+# V4 训练/测试分布差 (train fake 26% vs val/test 19%) 下，sqrt 更稳。
+CLASS_WEIGHT_MODE = "sqrt"
+
+# R-Drop 一致性损失：默认关闭，需要 2x 前向。
 USE_RDROP = False
 RDROP_ALPHA = 0.5
 
-# SWA：训练后期权重平均，使用 torch.optim.swa_utils。
+# SWA：V4 配置失效（start_epoch=18, early stop@13 → 未触发）。
+# V5 把 start_ratio 改到 0.3，patience 改到 12，确保 SWA 真正能用上。
 USE_SWA = True
-SWA_START_RATIO = 0.6  # 从 60% epoch 开始累积 SWA 模型
+SWA_START_RATIO = 0.3
 
-# 阈值调优：在验证集上扫描 fake 类阈值，选 macF1 最大的。
+# EMA（V5 新增）：训练全程维护影子模型，结束后与 best/SWA 三选一。
+USE_EMA = True
+EMA_DECAY = 0.999
+
+# Manifold Mixup（V5 新增）：在分类器输入做 mixup，强正则化。
+USE_MIXUP = True
+MIXUP_ALPHA = 0.4
+MIXUP_PROB = 0.5
+
+# 阈值调优：每 epoch 都搜，并把 tuned macF1 作为 best 选择依据。
 USE_THRESHOLD_TUNING = True
 THRESHOLD_SEARCH_RANGE = (0.20, 0.80)
 THRESHOLD_SEARCH_STEP = 0.01
@@ -219,15 +238,18 @@ THRESHOLD_SEARCH_STEP = 0.01
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.01
+# V5：non-BERT 参数（GAT/分类头/池化）weight_decay 单独提高，缓解头部过拟合。
+WEIGHT_DECAY_OTHER = 0.05
 EPOCHS = 30
 GRAD_ACCUM_STEPS = 4
 USE_AMP = True
 BERT_LR_FACTOR = 0.1
 WARMUP_RATIO = 0.15
 MIN_LR_RATIO = 0.01
-EARLY_STOPPING_PATIENCE = 8
-# Focal Loss 启用时关闭 label_smoothing。
-LABEL_SMOOTHING = 0.0
+# V5：与 SWA 配合放宽到 12，避免 SWA 还没启动就 early stop。
+EARLY_STOPPING_PATIENCE = 12
+# V5：Focal 关闭后启用温和 label smoothing。
+LABEL_SMOOTHING = 0.05
 USE_CLASS_WEIGHT = True
 GRAD_CLIP_MAX_NORM = 1.0
 MAX_WORKERS = 4
