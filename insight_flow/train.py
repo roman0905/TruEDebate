@@ -562,19 +562,12 @@ def train(
             ema=ema,
         )
 
-        # ── 验证：原始模型 ──
+        # ── 验证：原始模型，仅在 thr=0.5 计算指标，用 raw macF1 选 best ──
         val_pack = collect_predictions(model, val_loader, criterion, device)
-        if config.USE_THRESHOLD_TUNING:
-            val_thr, val_tuned_f1 = search_best_threshold(val_pack["probs"], val_pack["labels"])
-        else:
-            val_thr = 0.5
         val_metrics = metrics_from_probs(
-            val_pack["probs"], val_pack["labels"], threshold=val_thr
+            val_pack["probs"], val_pack["labels"], threshold=0.5
         )
-        val_metrics_05 = metrics_from_probs(val_pack["probs"], val_pack["labels"], threshold=0.5)
         val_metrics["loss"] = val_pack["loss"]
-        val_metrics["raw_macro_f1"] = val_metrics_05["macro_f1"]
-        val_metrics["raw_f1_fake"] = val_metrics_05["f1_fake"]
 
         # SWA 累积
         if config.USE_SWA and epoch >= swa_start_epoch:
@@ -589,34 +582,29 @@ def train(
             f"Train Loss: {train_loss:.4f} | "
             f"Val Loss: {val_metrics['loss']:.4f} | "
             f"Val Acc: {val_metrics['accuracy']:.4f} | "
-            f"Tuned macF1: {val_metrics['macro_f1']:.4f} (thr={val_thr:.3f}) | "
-            f"Raw macF1: {val_metrics['raw_macro_f1']:.4f} | "
+            f"Val macF1: {val_metrics['macro_f1']:.4f} | "
             f"F1_real: {val_metrics['f1_real']:.4f} | F1_fake: {val_metrics['f1_fake']:.4f} | "
             f"Fake P/R: {val_metrics['fake_precision']:.4f}/"
             f"{val_metrics['fake_recall']:.4f} | "
             f"Pred fake: {val_metrics['pred_fake']}/{val_metrics['true_fake']}"
         )
 
-        # 选 best（基于 tuned macF1）
+        # 选 best（基于 raw macF1@0.5）
         if val_metrics["macro_f1"] > best_val_f1:
             best_val_f1 = val_metrics["macro_f1"]
             best_metrics = val_metrics.copy()
             best_metrics["epoch"] = epoch
             best_metrics["val_probs"] = val_pack["probs"]
             best_metrics["val_labels"] = val_pack["labels"]
-            best_threshold = val_thr
 
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
-                "threshold": val_thr,
                 "val_metrics": {k: v for k, v in val_metrics.items() if not isinstance(v, np.ndarray)},
             }, checkpoint_dir / "best_model.pt")
-            logger.info(
-                f"  ★ 最佳模型已保存 (tuned macF1={best_val_f1:.4f}, thr={val_thr:.3f})"
-            )
+            logger.info(f"  ★ 最佳模型已保存 (macF1@0.5={best_val_f1:.4f})")
             patience_counter = 0
         else:
             patience_counter += 1
@@ -627,65 +615,79 @@ def train(
                 break
 
     # ── 后训练：评估 EMA 和 SWA ──
-    candidates = {"best": (best_val_f1, best_threshold, "best_model.pt")}
+    candidates = {"best": (best_val_f1, 0.5, "best_model.pt")}
 
     if ema is not None:
         # 创建一个临时副本评估 EMA
         ema_state_backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
         ema.apply_to(model)
         ema_pack = collect_predictions(model, val_loader, criterion, device)
-        ema_thr, _ = (
-            search_best_threshold(ema_pack["probs"], ema_pack["labels"])
-            if config.USE_THRESHOLD_TUNING else (0.5, 0.0)
-        )
-        ema_metrics = metrics_from_probs(ema_pack["probs"], ema_pack["labels"], threshold=ema_thr)
+        ema_metrics = metrics_from_probs(ema_pack["probs"], ema_pack["labels"], threshold=0.5)
         ema_metrics["loss"] = ema_pack["loss"]
-        ema_metrics["raw_macro_f1"] = metrics_from_probs(
-            ema_pack["probs"], ema_pack["labels"], 0.5
-        )["macro_f1"]
         logger.info(
-            f"EMA Val | Tuned macF1: {ema_metrics['macro_f1']:.4f} (thr={ema_thr:.3f}) | "
-            f"Raw macF1: {ema_metrics['raw_macro_f1']:.4f} | "
+            f"EMA Val | macF1@0.5: {ema_metrics['macro_f1']:.4f} | "
             f"F1_fake: {ema_metrics['f1_fake']:.4f}"
         )
         torch.save({
             "model_state_dict": ema.state_dict(),
-            "threshold": ema_thr,
             "val_metrics": ema_metrics,
         }, checkpoint_dir / "ema_model.pt")
-        candidates["ema"] = (ema_metrics["macro_f1"], ema_thr, "ema_model.pt")
-        # 恢复模型权重，避免影响后续 SWA 比较
+        candidates["ema"] = (ema_metrics["macro_f1"], 0.5, "ema_model.pt")
+        # 同时把 EMA probs 留下供 candidate 阈值搜索
+        candidates_probs = {"ema": (ema_pack["probs"], ema_pack["labels"])}
+        # 恢复模型权重
         model.load_state_dict(ema_state_backup)
+    else:
+        candidates_probs = {}
 
     if swa_model is not None:
         swa_pack = collect_predictions(swa_model, val_loader, criterion, device)
-        swa_thr, _ = (
-            search_best_threshold(swa_pack["probs"], swa_pack["labels"])
-            if config.USE_THRESHOLD_TUNING else (0.5, 0.0)
-        )
-        swa_metrics = metrics_from_probs(swa_pack["probs"], swa_pack["labels"], threshold=swa_thr)
+        swa_metrics = metrics_from_probs(swa_pack["probs"], swa_pack["labels"], threshold=0.5)
         swa_metrics["loss"] = swa_pack["loss"]
-        swa_metrics["raw_macro_f1"] = metrics_from_probs(
-            swa_pack["probs"], swa_pack["labels"], 0.5
-        )["macro_f1"]
         logger.info(
-            f"SWA Val | Tuned macF1: {swa_metrics['macro_f1']:.4f} (thr={swa_thr:.3f}) | "
-            f"Raw macF1: {swa_metrics['raw_macro_f1']:.4f} | "
+            f"SWA Val | macF1@0.5: {swa_metrics['macro_f1']:.4f} | "
             f"F1_fake: {swa_metrics['f1_fake']:.4f}"
         )
         torch.save({
             "model_state_dict": swa_model.state_dict(),
-            "threshold": swa_thr,
             "val_metrics": swa_metrics,
         }, checkpoint_dir / "swa_model.pt")
-        candidates["swa"] = (swa_metrics["macro_f1"], swa_thr, "swa_model.pt")
+        candidates["swa"] = (swa_metrics["macro_f1"], 0.5, "swa_model.pt")
+        candidates_probs["swa"] = (swa_pack["probs"], swa_pack["labels"])
 
-    # 选最佳 candidate
+    # 把 best 的 probs/labels 也加入 candidates_probs
+    if "val_probs" in best_metrics:
+        candidates_probs["best"] = (best_metrics["val_probs"], best_metrics["val_labels"])
+
+    # 选最佳 candidate（仍按 raw macF1@0.5）
     winner_name = max(candidates.keys(), key=lambda k: candidates[k][0])
-    winner_f1, winner_thr, winner_ckpt = candidates[winner_name]
+    winner_f1, _, winner_ckpt = candidates[winner_name]
     logger.info(
-        f"最终模型选择: {winner_name} (Val macF1={winner_f1:.4f}, thr={winner_thr:.3f})"
+        f"最终模型选择: {winner_name} (Val macF1@0.5={winner_f1:.4f})"
     )
+
+    # ── 在 winner 的 val probs 上搜索阈值 ──
+    winner_probs, winner_labels = candidates_probs[winner_name]
+    if config.USE_THRESHOLD_TUNING:
+        winner_thr, winner_tuned = search_best_threshold(winner_probs, winner_labels)
+        winner_val_metrics = metrics_from_probs(winner_probs, winner_labels, threshold=winner_thr)
+        logger.info(
+            f"阈值调优: best_threshold={winner_thr:.3f} | "
+            f"tuned Val macF1: {winner_val_metrics['macro_f1']:.4f} | "
+            f"F1_fake: {winner_val_metrics['f1_fake']:.4f}"
+        )
+    else:
+        winner_thr = 0.5
+        winner_val_metrics = metrics_from_probs(winner_probs, winner_labels, threshold=0.5)
+
+    # 更新 best_metrics（保留 epoch 信息）
+    epoch_field = best_metrics.get("epoch", "n/a")
+    for k, v in winner_val_metrics.items():
+        if not isinstance(v, np.ndarray):
+            best_metrics[k] = v
+    best_metrics["epoch"] = epoch_field
+    best_metrics["threshold"] = winner_thr
+    best_metrics["winner"] = winner_name
 
     # ── 测试集评估 ──
     if test_loader is not None:
@@ -711,6 +713,13 @@ def train(
         test_metrics_05 = metrics_from_probs(
             test_pack["probs"], test_pack["labels"], threshold=0.5
         )
+
+        # V6：把 winner 的 val/test probs 落盘，供 main_ensemble.py 聚合使用。
+        np.save(checkpoint_dir / "val_probs.npy", winner_probs)
+        np.save(checkpoint_dir / "val_labels.npy", winner_labels)
+        np.save(checkpoint_dir / "test_probs.npy", test_pack["probs"])
+        np.save(checkpoint_dir / "test_labels.npy", test_pack["labels"])
+        logger.info(f"概率已保存: {checkpoint_dir}/{{val,test}}_probs.npy")
 
         logger.info("=" * 60)
         logger.info(f"测试集结果 ({winner_name} 模型，阈值={winner_thr:.3f}):")

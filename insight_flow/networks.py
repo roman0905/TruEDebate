@@ -148,6 +148,9 @@ class TEDClassifier(nn.Module):
         self.edge_dropout_p = edge_dropout_p
         self.use_aux_loss = use_aux_loss
         self.proj_dim = proj_dim
+        # V6：BERT4 trick — 是否对最后 N 层 CLS 取平均。
+        self.use_bert4 = getattr(config, "USE_BERT4", False)
+        self.bert4_layers = getattr(config, "BERT4_LAYERS", 4)
 
         bert_name = config.BERT_MODELS.get(lang, config.BERT_MODELS["en"])
         bert_hidden = config.BERT_HIDDEN_DIM
@@ -250,9 +253,13 @@ class TEDClassifier(nn.Module):
         # 共 10 * proj_dim 维。
         combined_dim = proj_dim * 10
         self.combined_dim = combined_dim
-        # V5：减一层 MLP，降低头部容量（V4 五层 → 三层），缓解过拟合。
+        # V6：恢复 V4 的 5 层分类 MLP（V5 减到 3 层后头部表征不足）。
         self.classifier = nn.Sequential(
-            nn.Linear(combined_dim, proj_dim),
+            nn.Linear(combined_dim, proj_dim * 2),
+            nn.LayerNorm(proj_dim * 2),
+            nn.GELU(),
+            nn.Dropout(config.CLASSIFIER_DROPOUT),
+            nn.Linear(proj_dim * 2, proj_dim),
             nn.LayerNorm(proj_dim),
             nn.GELU(),
             nn.Dropout(config.CLASSIFIER_DROPOUT),
@@ -294,7 +301,16 @@ class TEDClassifier(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=self.use_bert4,
+        )
+        if self.use_bert4:
+            # hidden_states: tuple (num_layers + 1) of [B, L, D]，取最后 N 层 CLS 平均。
+            last_n = outputs.hidden_states[-self.bert4_layers:]
+            cls_stack = torch.stack([h[:, 0, :] for h in last_n], dim=0)  # [N, B, D]
+            return cls_stack.mean(dim=0)
         return outputs.last_hidden_state[:, 0, :]
 
     def _drop_perspective_nodes(

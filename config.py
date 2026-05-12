@@ -197,59 +197,57 @@ NODE_DROPOUT_P = 0.15
 EDGE_DROPOUT_P = 0.1
 # 是否在分类头里加入 perspective 节点辅助分类损失（multi-task）。
 USE_AUX_LOSS = True
-# V5 修复：从 0.3 降到 0.15，减轻 aux 对主任务的扰动。
-AUX_LOSS_WEIGHT = 0.15
+# V6：回到 V4 的 0.3（V5 降到 0.15 导致辅助信号不足）。
+AUX_LOSS_WEIGHT = 0.3
 
-# Focal Loss：V4 实验显示 Focal × class_weight 叠加导致梯度过冲，5 epoch 即过拟合。
-# V5 默认关闭，退回 CE+class_weight+label_smoothing。
-USE_FOCAL_LOSS = False
+# Focal Loss：V6 重新启用（V4 数据证明它有效，V5 的"双重加权"诊断错误）。
+USE_FOCAL_LOSS = True
 FOCAL_LOSS_GAMMA = 2.0
 
-# 类别权重模式：
-#   "inverse"  —— total/(2*counts)，会给少数类放大 ~2.86×，与 Focal 叠加会过冲；
-#   "sqrt"     —— sqrt(total/counts)/normalize，温和的少数类加权 (~1.4×)；
-#   "balanced" —— 直接 [1.0, 1.0]，禁用类权重，让 Focal 单独处理。
-# V4 训练/测试分布差 (train fake 26% vs val/test 19%) 下，sqrt 更稳。
-CLASS_WEIGHT_MODE = "sqrt"
+# 类别权重模式：V6 回到 inverse（V4 配置）。
+CLASS_WEIGHT_MODE = "inverse"
 
-# R-Drop 一致性损失：默认关闭，需要 2x 前向。
+# R-Drop 一致性损失：默认关闭。
 USE_RDROP = False
 RDROP_ALPHA = 0.5
 
-# SWA：V4 配置失效（start_epoch=18, early stop@13 → 未触发）。
-# V5 把 start_ratio 改到 0.3，patience 改到 12，确保 SWA 真正能用上。
-USE_SWA = True
+# SWA：V6 关闭（在 3884 样本规模下，best epoch 太早，SWA 拿不到足够样本）。
+USE_SWA = False
 SWA_START_RATIO = 0.3
 
-# EMA（V5 新增）：训练全程维护影子模型，结束后与 best/SWA 三选一。
-USE_EMA = True
+# EMA：V6 关闭（best 一般在 3-5 epoch，EMA 没机会沉淀）。
+USE_EMA = False
 EMA_DECAY = 0.999
 
-# Manifold Mixup（V5 新增）：在分类器输入做 mixup，强正则化。
-USE_MIXUP = True
+# Manifold Mixup：V6 关闭（V5 实验证明在 early-best 场景反而干扰收敛）。
+USE_MIXUP = False
 MIXUP_ALPHA = 0.4
 MIXUP_PROB = 0.5
 
-# 阈值调优：每 epoch 都搜，并把 tuned macF1 作为 best 选择依据。
+# 阈值调优：保留，但只在 best 模型上做一次（V5 的 per-epoch 调优会 over-fit val）。
 USE_THRESHOLD_TUNING = True
 THRESHOLD_SEARCH_RANGE = (0.20, 0.80)
 THRESHOLD_SEARCH_STEP = 0.01
 
+# V6 新增：BERT 最后 4 层 CLS 平均（BERT4 trick），通常能给 +0.3~0.8。
+USE_BERT4 = True
+BERT4_LAYERS = 4  # 取最后 N 层平均
+
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.01
-# V5：non-BERT 参数（GAT/分类头/池化）weight_decay 单独提高，缓解头部过拟合。
-WEIGHT_DECAY_OTHER = 0.05
+# V6：回到统一 weight_decay（V5 的 0.05 在 head 上太强）。
+WEIGHT_DECAY_OTHER = 0.01
 EPOCHS = 30
 GRAD_ACCUM_STEPS = 4
 USE_AMP = True
 BERT_LR_FACTOR = 0.1
 WARMUP_RATIO = 0.15
 MIN_LR_RATIO = 0.01
-# V5：与 SWA 配合放宽到 12，避免 SWA 还没启动就 early stop。
-EARLY_STOPPING_PATIENCE = 12
-# V5：Focal 关闭后启用温和 label smoothing。
-LABEL_SMOOTHING = 0.05
+# V6：回到 V4 patience。
+EARLY_STOPPING_PATIENCE = 8
+# V6：Focal Loss 模式下关闭 label smoothing（避免双重平滑）。
+LABEL_SMOOTHING = 0.0
 USE_CLASS_WEIGHT = True
 GRAD_CLIP_MAX_NORM = 1.0
 MAX_WORKERS = 4
