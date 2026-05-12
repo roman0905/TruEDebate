@@ -53,6 +53,37 @@ ROLE_IDS = {
 }
 NUM_ROLES = max(ROLE_IDS.values()) + 1
 
+# 节点角色分组：用于分层池化分类头。
+# 0=planner(背景/规划), 1=perspective(证据), 2=coordinator(综合), 3=judge(裁判)
+NODE_GROUP_PLANNER = 0
+NODE_GROUP_PERSPECTIVE = 1
+NODE_GROUP_COORDINATOR = 2
+NODE_GROUP_JUDGE = 3
+NUM_NODE_GROUPS = 4
+
+ROLE_TO_GROUP = {
+    # 旧 TED 角色映射
+    0: NODE_GROUP_PERSPECTIVE,  # proponent_opening
+    1: NODE_GROUP_PERSPECTIVE,  # opponent_opening
+    2: NODE_GROUP_PERSPECTIVE,  # proponent_questioner
+    3: NODE_GROUP_PERSPECTIVE,  # opponent_questioner
+    4: NODE_GROUP_COORDINATOR,  # proponent_closing
+    5: NODE_GROUP_COORDINATOR,  # opponent_closing
+    6: NODE_GROUP_JUDGE,        # synthesis
+    # PAMD 角色映射
+    7: NODE_GROUP_PLANNER,      # perspective_planner
+    8: NODE_GROUP_PERSPECTIVE,  # factual_consistency
+    9: NODE_GROUP_PERSPECTIVE,  # causal_reasoning
+    10: NODE_GROUP_PERSPECTIVE, # temporal_reasoning
+    11: NODE_GROUP_PERSPECTIVE, # emotional_manipulation
+    12: NODE_GROUP_PERSPECTIVE, # intent_analysis
+    13: NODE_GROUP_PERSPECTIVE, # linguistic_style
+    14: NODE_GROUP_COORDINATOR, # perspective_coordinator
+    15: NODE_GROUP_JUDGE,       # self_reflective_judge
+    16: NODE_GROUP_JUDGE,       # role_reversal_judge
+    17: NODE_GROUP_JUDGE,       # final_judge
+}
+
 # 原始 TED 边结构，用于兼容旧模式和旧 JSON。
 EDGE_LIST = [
     (0, 2), (0, 3), (1, 2), (1, 3),
@@ -133,7 +164,8 @@ BERT_MODELS = {
 }
 BERT_MAX_LENGTH = 512
 BERT_HIDDEN_DIM = 768
-BERT_FREEZE_LAYERS = 6
+# 优化：增加冻结层从 6 → 9，减少可训练参数（缓解 3884 样本对应 45M 参数过拟合）。
+BERT_FREEZE_LAYERS = 9
 
 LABEL_MAP = {
     "real": 0, "Real": 0, "REAL": 0, "true": 0, "True": 0, "TRUE": 0,
@@ -146,13 +178,43 @@ ROLE_PROJ_DIM = BERT_HIDDEN_DIM
 GAT_HIDDEN_DIM = 256
 GAT_HEADS = 4
 GAT_LAYERS = 2
-GAT_DROPOUT = 0.1
+# 优化：GAT dropout 0.1 → 0.2，加强消息传播正则化。
+GAT_DROPOUT = 0.2
 PROJ_DIM = 256
 MHA_HEADS = 4
-CLASSIFIER_DROPOUT = 0.1
-NUMERIC_FEATURE_DIM = 8
+# 优化：分类器 dropout 0.1 → 0.3，缓解过拟合。
+CLASSIFIER_DROPOUT = 0.3
+# 优化：数值特征从 8 维扩充到 16 维。
+NUMERIC_FEATURE_DIM = 16
 NUMERIC_FEATURE_PROJ_DIM = 64
 SANITIZE_FINAL_LABEL_TEXT = True
+
+# ──────────────────────────────── 创新点：训练正则化 ────────────────────────────────
+
+# 节点 dropout：训练时随机 mask 部分 perspective 节点的特征，模拟 perspective 缺失。
+NODE_DROPOUT_P = 0.15
+# 边 dropout：训练时随机 drop 部分边，正则化 GAT。
+EDGE_DROPOUT_P = 0.1
+# 是否在分类头里加入 perspective 节点辅助分类损失（multi-task）。
+USE_AUX_LOSS = True
+AUX_LOSS_WEIGHT = 0.3
+
+# Focal Loss：替代 CE+label_smoothing，针对 F1_fake 偏低。
+USE_FOCAL_LOSS = True
+FOCAL_LOSS_GAMMA = 2.0
+
+# R-Drop 一致性损失：默认关闭，需要 2x 前向，可在最终阶段启用。
+USE_RDROP = False
+RDROP_ALPHA = 0.5
+
+# SWA：训练后期权重平均，使用 torch.optim.swa_utils。
+USE_SWA = True
+SWA_START_RATIO = 0.6  # 从 60% epoch 开始累积 SWA 模型
+
+# 阈值调优：在验证集上扫描 fake 类阈值，选 macF1 最大的。
+USE_THRESHOLD_TUNING = True
+THRESHOLD_SEARCH_RANGE = (0.20, 0.80)
+THRESHOLD_SEARCH_STEP = 0.01
 
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
@@ -164,7 +226,8 @@ BERT_LR_FACTOR = 0.1
 WARMUP_RATIO = 0.15
 MIN_LR_RATIO = 0.01
 EARLY_STOPPING_PATIENCE = 8
-LABEL_SMOOTHING = 0.1
+# Focal Loss 启用时关闭 label_smoothing。
+LABEL_SMOOTHING = 0.0
 USE_CLASS_WEIGHT = True
 GRAD_CLIP_MAX_NORM = 1.0
 MAX_WORKERS = 4

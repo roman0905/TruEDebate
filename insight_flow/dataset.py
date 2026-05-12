@@ -6,6 +6,7 @@ TruEDebate (TED) — PyG Dataset 定义
 
 import json
 import logging
+import math
 import re
 from pathlib import Path
 
@@ -19,38 +20,55 @@ import config
 logger = logging.getLogger(__name__)
 
 
+# 数值特征维度（必须与 config.NUMERIC_FEATURE_DIM 一致）。
+# 0  planner_conf            该样本所有 perspective 的平均规划置信度
+# 1  priority_norm           该 perspective 的优先级归一化分数（1 - (priority-1)/(k-1)）
+# 2  report_conf             节点文本中解析出的 confidence 值
+# 3  self_reflective_conf    self-reflective judge 的置信度
+# 4  consistency             role-reversal judge 的一致性分数
+# 5  final_conf              final judge 置信度
+# 6  uncertainty_signal      文本是否包含 "uncertain"
+# 7  is_perspective_node     是否 perspective agent 节点
+# ── 扩充字段 ──
+# 8  is_planner_node
+# 9  is_coordinator_node
+# 10 is_judge_node
+# 11 node_text_log_length    log(len(text)+1)/10
+# 12 has_numbers_or_dates    节点文本是否含数字/日期
+# 13 role_reversal_flip      role-reversal 是否触发标签翻转信号
+# 14 sample_perspectives_real_ratio  全样本视角投真比例（共享于所有节点）
+# 15 sample_perspectives_fake_ratio  全样本视角投假比例（共享于所有节点）
+
+
 class DebateGraphDataset(TorchDataset):
     """
     辩论图数据集。
 
-    每条样本对应一篇新闻的完整辩论记录（8 个节点 + 边索引 + 标签）。
-    节点文本在 __getitem__ 中动态 tokenize，避免预先计算占用过多内存。
+    每条样本对应一篇新闻的完整辩论记录（PAMD 模式 9 节点 / 原 TED 7 节点）。
     """
 
+    _NUMBER_RE = re.compile(r"\d")
+    _DATE_RE = re.compile(
+        r"\b(?:\d{4}|\d{1,2}/\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b",
+        re.IGNORECASE,
+    )
+
     def __init__(self, data_dir: str | Path, lang: str = "en"):
-        """
-        Args:
-            data_dir: 存储辩论 JSON 文件的目录路径
-            lang: 语言选择 ("en" 或 "zh")，决定 BERT Tokenizer
-        """
         self.data_dir = Path(data_dir)
         self.lang = lang
 
-        # 加载所有 JSON 文件路径
         self.file_paths = sorted(self.data_dir.glob("*.json"))
         if len(self.file_paths) == 0:
             logger.warning(f"数据目录 {data_dir} 中没有找到 JSON 文件！")
 
         logger.info(f"加载数据集: {len(self.file_paths)} 个样本 (lang={lang})")
 
-        # 初始化 BERT Tokenizer (优先使用本地模型目录)
         bert_name = config.BERT_MODELS.get(lang, config.BERT_MODELS["en"])
         tokenizer_path = self._resolve_tokenizer_path(bert_name)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
     @staticmethod
     def _resolve_tokenizer_path(bert_name: str) -> str:
-        """解析 Tokenizer 路径: 优先使用本地 models/ 目录。"""
         dir_name = bert_name.split("/")[-1]
         local_path = config.BERT_LOCAL_DIR / dir_name
         if local_path.exists() and (local_path / "tokenizer_config.json").exists():
@@ -65,7 +83,6 @@ class DebateGraphDataset(TorchDataset):
 
     @staticmethod
     def _score_from_text(text: str, keys: tuple[str, ...]) -> float:
-        """从 LLM 结构化文本中解析 0-1 分数。解析失败返回 0。"""
         lowered = text.lower()
         for key in keys:
             pattern = rf"{re.escape(key.lower())}\s*(?:\*\*)?\s*[:：]?\s*(?:\*\*)?\s*[-–]?\s*([01](?:\.\d+)?)"
@@ -78,14 +95,22 @@ class DebateGraphDataset(TorchDataset):
         return 0.0
 
     @staticmethod
+    def _label_from_text(text: str, keys: tuple[str, ...]) -> int | None:
+        """从结构化文本中解析 fake/real/true/false 标签。"""
+        lowered = text.lower()
+        for key in keys:
+            pattern = rf"{re.escape(key.lower())}\s*[:：]?\s*\"?(real|fake|true|false)\"?"
+            match = re.search(pattern, lowered)
+            if match:
+                token = match.group(1)
+                return 1 if token in ("fake", "false") else 0
+        return None
+
+    @staticmethod
     def _sanitize_node_text(text: str) -> str:
-        """
-        删除 LLM 伪标签字段，避免模型直接学习低精度 final_label /
-        provisional_label / verdict_hint 文本。
-        """
+        """删除 LLM 伪标签字段，避免直接学到 final_label。"""
         if not config.SANITIZE_FINAL_LABEL_TEXT:
             return text
-
         sanitized_lines = []
         label_patterns = (
             "final_label",
@@ -102,11 +127,60 @@ class DebateGraphDataset(TorchDataset):
         return sanitized or text
 
     @classmethod
+    def _has_numbers_or_dates(cls, text: str) -> float:
+        if cls._DATE_RE.search(text):
+            return 1.0
+        if cls._NUMBER_RE.search(text):
+            return 1.0
+        return 0.0
+
+    @classmethod
+    def _perspective_vote_summary(
+        cls, record: dict, nodes: list[dict]
+    ) -> tuple[float, float, float]:
+        """从 perspective 节点文本里粗略统计 fake/real 倾向，并探测 role-reversal flip。"""
+        real_votes = 0
+        fake_votes = 0
+        total = 0
+        for node in nodes:
+            if not node.get("perspective_key"):
+                continue
+            total += 1
+            label = cls._label_from_text(
+                node.get("text", ""),
+                ("verdict", "perspective_verdict", "label", "stance"),
+            )
+            if label == 0:
+                real_votes += 1
+            elif label == 1:
+                fake_votes += 1
+        denom = max(total, 1)
+        real_ratio = real_votes / denom
+        fake_ratio = fake_votes / denom
+
+        role_reversal = record.get("role_reversal") or {}
+        flip_signal = 0.0
+        if isinstance(role_reversal, dict):
+            consistency = role_reversal.get("consistency_score") or role_reversal.get(
+                "consistency"
+            )
+            try:
+                if consistency is not None and float(consistency) < 0.5:
+                    flip_signal = 1.0
+            except (TypeError, ValueError):
+                flip_signal = 0.0
+            flip_text = " ".join(
+                str(v) for v in role_reversal.values() if isinstance(v, str)
+            ).lower()
+            if "flip" in flip_text or "inconsistent" in flip_text:
+                flip_signal = 1.0
+        return real_ratio, fake_ratio, flip_signal
+
+    @classmethod
     def _build_numeric_features(cls, record: dict, nodes: list[dict]) -> torch.Tensor:
         """
-        将 PAMD 的 planner confidence、priority、agent confidence、
-        self-reflection confidence、role-reversal consistency、final confidence
-        显式转为节点数值特征。
+        构造 16 维节点数值特征。每行代表一个节点。
+        共享样本级特征（投票比例、role-reversal flip）会复制到所有节点。
         """
         selected = record.get("selected_perspectives", [])
         selected_by_key = {
@@ -124,6 +198,8 @@ class DebateGraphDataset(TorchDataset):
         )
         top_k = max(len(selected), 1)
 
+        real_ratio, fake_ratio, flip_signal = cls._perspective_vote_summary(record, nodes)
+
         features = []
         for node in nodes:
             role_name = str(node.get("role_name", ""))
@@ -138,14 +214,23 @@ class DebateGraphDataset(TorchDataset):
             consistency = 0.0
             final_conf = 0.0
 
-            if role_name == "perspective_planner":
+            is_planner = 1.0 if role_name == "perspective_planner" else 0.0
+            is_perspective = 1.0 if perspective_key else 0.0
+            is_coordinator = 1.0 if role_name == "perspective_coordinator" else 0.0
+            is_judge = (
+                1.0
+                if role_name in ("self_reflective_judge", "role_reversal_judge", "final_judge")
+                else 0.0
+            )
+
+            if is_planner > 0.5:
                 planner_conf = avg_planner_conf
-            elif perspective_key:
+            elif is_perspective > 0.5:
                 planner_conf = float(selected_item.get("confidence", 0.0) or 0.0)
                 priority = float(selected_item.get("priority", top_k) or top_k)
                 priority_norm = 1.0 - ((priority - 1.0) / max(top_k - 1, 1))
                 report_conf = cls._score_from_text(text, ("confidence",))
-            elif role_name == "perspective_coordinator":
+            elif is_coordinator > 0.5:
                 planner_conf = avg_planner_conf
             elif role_name == "self_reflective_judge":
                 self_conf = cls._score_from_text(text, ("confidence_score",))
@@ -155,6 +240,9 @@ class DebateGraphDataset(TorchDataset):
                 final_conf = cls._score_from_text(text, ("confidence_score",))
 
             uncertainty_signal = 1.0 if "uncertain" in text.lower() else 0.0
+            text_log_length = min(math.log(max(len(text), 1) + 1) / 10.0, 1.0)
+            has_numdate = cls._has_numbers_or_dates(text)
+
             features.append(
                 [
                     planner_conf,
@@ -164,28 +252,31 @@ class DebateGraphDataset(TorchDataset):
                     consistency,
                     final_conf,
                     uncertainty_signal,
-                    1.0 if perspective_key else 0.0,
+                    is_perspective,
+                    is_planner,
+                    is_coordinator,
+                    is_judge,
+                    text_log_length,
+                    has_numdate,
+                    flip_signal,
+                    real_ratio,
+                    fake_ratio,
                 ]
             )
 
         return torch.tensor(features, dtype=torch.float)
 
-    def __getitem__(self, idx: int) -> Data:
-        """
-        加载第 idx 条辩论记录并构建 PyG Data 对象。
+    @staticmethod
+    def _build_node_group_ids(nodes: list[dict]) -> torch.Tensor:
+        """根据 role_id 映射到 4 个语义组。"""
+        groups = []
+        for node in nodes:
+            role_id = int(node.get("role_id", -1))
+            group = config.ROLE_TO_GROUP.get(role_id, config.NODE_GROUP_PERSPECTIVE)
+            groups.append(group)
+        return torch.tensor(groups, dtype=torch.long)
 
-        Returns:
-            Data 对象包含:
-                - node_input_ids:      [num_nodes, max_length] Token IDs
-                - node_attention_mask: [num_nodes, max_length] Attention masks
-                - role_ids:            [num_nodes] 角色 ID
-                - edge_index:          [2, num_edges] 有向边索引
-                - edge_type:           [num_edges] 边类型 ID，旧数据缺失时补 0
-                - news_input_ids:      [1, max_length] 新闻 Token IDs
-                - news_attention_mask: [1, max_length] 新闻 Attention masks
-                - y:                   标量标签 (0=real, 1=fake)
-        """
-        # 1. 读取 JSON 文件
+    def __getitem__(self, idx: int) -> Data:
         with open(self.file_paths[idx], "r", encoding="utf-8") as f:
             record = json.load(f)
 
@@ -195,12 +286,11 @@ class DebateGraphDataset(TorchDataset):
         label = record["label"]
         news_text = record["news_text"]
 
-        # 标签标准化: 将字符串标签映射为整数
         if isinstance(label, str):
             label = config.LABEL_MAP.get(label, label)
         label = int(label)
 
-        # 2. Tokenize 每个节点文本
+        # Tokenize 每个节点文本
         node_texts = [self._sanitize_node_text(n["text"]) for n in nodes]
         node_encodings = self.tokenizer(
             node_texts,
@@ -209,21 +299,15 @@ class DebateGraphDataset(TorchDataset):
             max_length=config.BERT_MAX_LENGTH,
             return_tensors="pt",
         )
-        # node_input_ids: [num_nodes, max_length]
-        # node_attention_mask: [num_nodes, max_length]
 
-        # 3. 提取角色 ID
         role_ids = torch.tensor(
             [n["role_id"] for n in nodes], dtype=torch.long
         )
+        node_group_ids = self._build_node_group_ids(nodes)
         numeric_features = self._build_numeric_features(record, nodes)
 
-        # 4. 构建 edge_index Tensor
         edge_index_tensor = torch.tensor(edge_index, dtype=torch.long)
-        # 确保形状为 [2, num_edges]
-        if edge_index_tensor.dim() == 2 and edge_index_tensor.shape[0] == 2:
-            pass  # 已经是正确形状
-        else:
+        if not (edge_index_tensor.dim() == 2 and edge_index_tensor.shape[0] == 2):
             raise ValueError(
                 f"edge_index 形状异常: {edge_index_tensor.shape}, 期望 [2, num_edges]"
             )
@@ -239,11 +323,9 @@ class DebateGraphDataset(TorchDataset):
             edge_type_tensor = torch.tensor(edge_type, dtype=torch.long)
             if edge_type_tensor.numel() != num_edges:
                 raise ValueError(
-                    f"edge_type 长度异常: {edge_type_tensor.numel()}, "
-                    f"期望 {num_edges}"
+                    f"edge_type 长度异常: {edge_type_tensor.numel()}, 期望 {num_edges}"
                 )
 
-        # 5. Tokenize 新闻文本
         news_encoding = self.tokenizer(
             news_text,
             padding="max_length",
@@ -251,29 +333,20 @@ class DebateGraphDataset(TorchDataset):
             max_length=config.BERT_MAX_LENGTH,
             return_tensors="pt",
         )
-        # news_input_ids: [1, max_length]
-        # news_attention_mask: [1, max_length]
 
-        # 6. 构建 PyG Data 对象
         data = Data(
-            # 节点文本 Token 信息
             node_input_ids=node_encodings["input_ids"],
             node_attention_mask=node_encodings["attention_mask"],
-            # 角色 ID
             role_ids=role_ids,
+            node_group_ids=node_group_ids,
             numeric_features=numeric_features,
-            # 图结构
             edge_index=edge_index_tensor,
             edge_type=edge_type_tensor,
-            # 新闻文本 Token 信息
             news_input_ids=news_encoding["input_ids"],
             news_attention_mask=news_encoding["attention_mask"],
-            # 标签
             y=torch.tensor(label, dtype=torch.long),
-            # 节点数 (供 PyG batching 使用)
             num_nodes=len(nodes),
         )
-
         return data
 
     @staticmethod
@@ -282,7 +355,6 @@ class DebateGraphDataset(TorchDataset):
         edge_index: list[list[int]],
         nodes: list[dict],
     ) -> list[int]:
-        """把中立 perspective agent 之间的 attack 边改成 cross_perspective。"""
         attack_id = config.EDGE_TYPE_IDS["attack"]
         cross_id = config.EDGE_TYPE_IDS["cross_perspective"]
         remapped = list(edge_type)

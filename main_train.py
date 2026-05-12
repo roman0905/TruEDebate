@@ -83,8 +83,36 @@ def main():
         help="冻结 BERT 前 N 层"
     )
     parser.add_argument(
-        "--data_suffix", type=str, default="",
+        "--data_suffix", type=str, default="_pamd",
         help="辩论输出目录后缀，例如 _pamd 表示读取 output/en_train_pamd"
+    )
+    parser.add_argument(
+        "--node_dropout", type=float, default=None,
+        help="覆盖 config.NODE_DROPOUT_P"
+    )
+    parser.add_argument(
+        "--edge_dropout", type=float, default=None,
+        help="覆盖 config.EDGE_DROPOUT_P"
+    )
+    parser.add_argument(
+        "--aux_weight", type=float, default=None,
+        help="覆盖 config.AUX_LOSS_WEIGHT；设为 0 则禁用辅助损失"
+    )
+    parser.add_argument(
+        "--no_focal", action="store_true",
+        help="禁用 Focal Loss，回退到加权 CrossEntropy"
+    )
+    parser.add_argument(
+        "--no_swa", action="store_true",
+        help="禁用 SWA"
+    )
+    parser.add_argument(
+        "--no_threshold", action="store_true",
+        help="禁用验证集阈值调优"
+    )
+    parser.add_argument(
+        "--focal_gamma", type=float, default=None,
+        help="覆盖 Focal Loss 的 gamma"
     )
     parser.add_argument(
         "--no_typed_edges", action="store_true",
@@ -99,6 +127,23 @@ def main():
         help="模型与指标保存目录"
     )
     args = parser.parse_args()
+
+    # ── 命令行覆盖 config ──
+    if args.node_dropout is not None:
+        config.NODE_DROPOUT_P = args.node_dropout
+    if args.edge_dropout is not None:
+        config.EDGE_DROPOUT_P = args.edge_dropout
+    if args.aux_weight is not None:
+        config.AUX_LOSS_WEIGHT = args.aux_weight
+        config.USE_AUX_LOSS = args.aux_weight > 0
+    if args.no_focal:
+        config.USE_FOCAL_LOSS = False
+    if args.no_swa:
+        config.USE_SWA = False
+    if args.no_threshold:
+        config.USE_THRESHOLD_TUNING = False
+    if args.focal_gamma is not None:
+        config.FOCAL_LOSS_GAMMA = args.focal_gamma
 
     set_seed(args.seed)
 
@@ -190,6 +235,12 @@ def main():
     logger.info(f"  Edge Type:   {not args.no_typed_edges}")
     logger.info(f"  Seed:        {args.seed}")
     logger.info(f"  Checkpoint:  {args.checkpoint_dir}")
+    logger.info(f"  Focal Loss:  {config.USE_FOCAL_LOSS} (gamma={config.FOCAL_LOSS_GAMMA})")
+    logger.info(f"  Aux Loss:    {config.USE_AUX_LOSS} (weight={config.AUX_LOSS_WEIGHT})")
+    logger.info(f"  Node DropP:  {config.NODE_DROPOUT_P}")
+    logger.info(f"  Edge DropP:  {config.EDGE_DROPOUT_P}")
+    logger.info(f"  SWA:         {config.USE_SWA} (start_ratio={config.SWA_START_RATIO})")
+    logger.info(f"  ThreshTune:  {config.USE_THRESHOLD_TUNING}")
     logger.info("=" * 60)
 
     # 更新全局梯度累积配置
