@@ -100,26 +100,15 @@ def supcon_loss(
     labels: torch.Tensor,
     temperature: float = 0.07,
 ) -> torch.Tensor:
-    """Supervised Contrastive Loss (Khosla et al., 2020).
-
-    给定一批 graph-level 表示和它们的真假标签，强迫同标签样本聚拢、
-    异标签样本远离。修补 TED 漏洞 W5（BERT 不知立场）：让表示空间
-    具备 stance-discriminative 结构。
-
-    Args:
-        features: [B, D] 任意维度的样本级特征。
-        labels  : [B]   样本标签。
-        temperature: 温度系数。
-    """
+    """Supervised Contrastive Loss (Khosla et al., 2020)."""
     B = features.shape[0]
     if B < 2:
         return features.new_zeros(())
 
-    # V7 修复：AMP autocast 下 fp16 的 -1e9 会 overflow，强制在 fp32 下计算。
     device_type = features.device.type
     with torch.amp.autocast(device_type, enabled=False):
         feats = F.normalize(features.float(), dim=-1)
-        sim = feats @ feats.T / float(temperature)            # [B, B] fp32
+        sim = feats @ feats.T / float(temperature)
 
         eye = torch.eye(B, device=features.device, dtype=torch.bool)
         sim = sim.masked_fill(eye, -1e9)
@@ -137,6 +126,129 @@ def supcon_loss(
         denom = valid.sum().clamp_min(1.0)
         loss = -(mean_log_prob_pos * valid).sum() / denom
     return loss
+
+
+# ──────────────────────────────── V8 XPCR / DATR / KDPE ────────────────────────────────
+
+
+def _scatter_mean_probs(
+    probs: torch.Tensor,
+    batch_ids: torch.Tensor,
+    batch_size: int,
+) -> torch.Tensor:
+    """对每个样本下的 K 个 perspective probs 取均值。"""
+    C = probs.shape[-1]
+    sums = torch.zeros(
+        batch_size, C, device=probs.device, dtype=probs.dtype
+    )
+    counts = torch.zeros(
+        batch_size, device=probs.device, dtype=probs.dtype
+    )
+    sums.index_add_(0, batch_ids, probs)
+    counts.index_add_(
+        0, batch_ids, torch.ones_like(batch_ids, dtype=probs.dtype)
+    )
+    return sums / counts.unsqueeze(-1).clamp_min(1.0)
+
+
+def xpcr_loss(
+    aux_logits: torch.Tensor,
+    aux_batch_ids: torch.Tensor,
+    batch_size: int,
+) -> torch.Tensor:
+    """Cross-Perspective Consensus Regularization。
+
+    让同一 sample 下的 perspective aux_logits 互相靠拢：
+        L_xpcr = mean_i KL( softmax(aux_i) || mean_j softmax(aux_j) )
+
+    全部用 fp32 计算，避免 AMP 下数值不稳。
+    """
+    if aux_logits.numel() == 0:
+        return aux_logits.new_zeros(())
+
+    device_type = aux_logits.device.type
+    with torch.amp.autocast(device_type, enabled=False):
+        log_p = F.log_softmax(aux_logits.float(), dim=-1)
+        p = log_p.exp()
+        mean_p = _scatter_mean_probs(p, aux_batch_ids, batch_size)        # [B, C]
+        mean_log_p = mean_p.clamp_min(1e-8).log()
+        mean_log_p_per_persp = mean_log_p[aux_batch_ids]                  # [K, C]
+        # KL(p_i || mean_p) = Σ p_i (log p_i - log mean_p)
+        kl = (p * (log_p - mean_log_p_per_persp)).sum(-1)                 # [K]
+    return kl.mean()
+
+
+def datr_aggregate(
+    main_logits: torch.Tensor,
+    aux_logits: torch.Tensor,
+    aux_batch_ids: torch.Tensor,
+    batch_size: int,
+    alpha: float = 0.3,
+) -> torch.Tensor:
+    """Disagreement-Aware Test-Time Routing：把 main 与 perspective aux 加权融合。
+
+    每个 perspective 的权重 = 1 / (1 + KL(p_i || mean_p))，
+    分歧越大权重越低；权重在 sample 内归一化。
+
+    Returns:
+        融合后的 logits，与 main_logits 同形状 [B, C]。
+    """
+    if aux_logits.numel() == 0:
+        return main_logits
+
+    device_type = aux_logits.device.type
+    with torch.amp.autocast(device_type, enabled=False):
+        m_logits = main_logits.float()
+        a_logits = aux_logits.float()
+        log_p = F.log_softmax(a_logits, dim=-1)
+        p = log_p.exp()
+        mean_p = _scatter_mean_probs(p, aux_batch_ids, batch_size)
+        mean_log_p = mean_p.clamp_min(1e-8).log()
+        mean_log_p_per_persp = mean_log_p[aux_batch_ids]
+        kl = (p * (log_p - mean_log_p_per_persp)).sum(-1)                 # [K]
+
+        weights = 1.0 / (1.0 + kl)                                        # [K]
+        weight_sums = torch.zeros(
+            batch_size, device=weights.device, dtype=weights.dtype
+        )
+        weight_sums.index_add_(0, aux_batch_ids, weights)
+        normalized = weights / weight_sums[aux_batch_ids].clamp_min(1e-8)
+
+        weighted_logits = a_logits * normalized.unsqueeze(-1)             # [K, C]
+        aggregated = torch.zeros(
+            batch_size, a_logits.shape[-1],
+            device=a_logits.device, dtype=a_logits.dtype,
+        )
+        aggregated.index_add_(0, aux_batch_ids, weighted_logits)          # [B, C]
+
+        fused = (1.0 - alpha) * m_logits + alpha * aggregated
+    return fused.to(main_logits.dtype)
+
+
+def kdpe_loss(
+    student_logits: torch.Tensor,
+    teacher_probs: torch.Tensor,
+    temperature: float = 4.0,
+) -> torch.Tensor:
+    """Knowledge Distillation：student logits 逼近 teacher 软标签。
+
+    L_kd = T² · KL( softmax(student / T) || teacher_softened )
+
+    teacher_probs 已经是概率分布（V6 ensemble 已经 softmax 平均过）。
+    """
+    if teacher_probs.numel() == 0:
+        return student_logits.new_zeros(())
+
+    device_type = student_logits.device.type
+    with torch.amp.autocast(device_type, enabled=False):
+        s_log_soft = F.log_softmax(student_logits.float() / temperature, dim=-1)
+        # 把 teacher 概率重新升温（防止它太硬）
+        t_log = teacher_probs.float().clamp_min(1e-8).log()
+        t_log_soft = F.log_softmax(t_log / temperature, dim=-1)
+        t_soft = t_log_soft.exp()
+        # KL(t || s) — t 是 target 分布
+        kl = (t_soft * (t_log_soft - s_log_soft)).sum(-1)
+    return (temperature ** 2) * kl.mean()
 
 
 # ──────────────────────────────── EMA ────────────────────────────────
@@ -186,6 +298,7 @@ def _extract_batch(batch_data, labels_required: bool = True):
     news_input_ids = batch_data.news_input_ids
     news_attention_mask = batch_data.news_attention_mask
     labels = batch_data.y if labels_required else None
+    sample_idx = getattr(batch_data, "sample_idx", None)
 
     if labels is not None and news_input_ids.dim() == 2 and news_input_ids.shape[0] != labels.shape[0]:
         bs = labels.shape[0]
@@ -205,6 +318,7 @@ def _extract_batch(batch_data, labels_required: bool = True):
         "news_input_ids": news_input_ids,
         "news_attention_mask": news_attention_mask,
         "labels": labels,
+        "sample_idx": sample_idx,
     }
 
 
@@ -249,6 +363,10 @@ def train_one_epoch(
     ema: ModelEMA | None = None,
     supcon_weight: float = 0.0,
     supcon_temperature: float = 0.07,
+    xpcr_weight: float = 0.0,
+    kdpe_weight: float = 0.0,
+    kdpe_temperature: float = 4.0,
+    teacher_probs: torch.Tensor | None = None,
 ) -> float:
     model.train()
     total_loss = 0.0
@@ -257,17 +375,22 @@ def train_one_epoch(
 
     use_aux = aux_loss_weight > 0 and getattr(model, "use_aux_loss", False)
     use_supcon = supcon_weight > 0
+    use_xpcr = xpcr_weight > 0 and getattr(model, "use_aux_loss", False)
+    use_kdpe = kdpe_weight > 0 and teacher_probs is not None
+    need_aux_output = use_aux or use_xpcr
+    need_features = use_supcon
     use_amp = scaler is not None
 
     for step, batch_data in enumerate(loader):
         batch_data = batch_data.to(device)
         fields = _extract_batch(batch_data)
         labels = fields["labels"]
-        apply_mixup_now = use_mixup and (random.random() < mixup_prob) and labels.size(0) > 1
+        sample_idx = fields["sample_idx"]
+        bs = labels.size(0)
+        apply_mixup_now = use_mixup and (random.random() < mixup_prob) and bs > 1
 
         def _compute_loss():
             if apply_mixup_now:
-                # Manifold Mixup：在分类器输入处混合两条样本的拼接特征。
                 logits, features = _call_model(model, fields, return_features=True)
                 main_loss = criterion(logits, labels)
                 perm = torch.randperm(features.size(0), device=features.device)
@@ -280,29 +403,44 @@ def train_one_epoch(
                     + (1.0 - lam) * criterion(mixed_logits, labels[perm])
                 )
                 total = 0.5 * main_loss + 0.5 * mixed_loss
-                if use_supcon and labels.size(0) >= 2:
+                if use_supcon and bs >= 2:
                     total = total + supcon_weight * supcon_loss(
                         features, labels, supcon_temperature
                     )
                 return total
 
-            # 非 mixup 路径：常规 + aux + (可选) SCRA SupCon
-            if use_aux or use_supcon:
+            # 非 mixup 路径：常规 + (可选) aux + xpcr + supcon + kdpe
+            if need_aux_output or need_features:
                 logits, aux_logits, aux_batch_ids, features = _call_model(
                     model, fields, return_aux=True, return_features=True
                 )
-                main_loss = criterion(logits, labels)
-                total = main_loss
-                if use_aux and aux_logits.numel() > 0:
-                    aux_labels = labels[aux_batch_ids]
-                    total = total + aux_loss_weight * criterion(aux_logits, aux_labels)
-                if use_supcon and labels.size(0) >= 2:
-                    total = total + supcon_weight * supcon_loss(
-                        features, labels, supcon_temperature
-                    )
-                return total
-            logits = _call_model(model, fields)
-            return criterion(logits, labels)
+            else:
+                logits = _call_model(model, fields)
+                aux_logits = aux_batch_ids = features = None
+
+            main_loss = criterion(logits, labels)
+            total = main_loss
+
+            if use_aux and aux_logits is not None and aux_logits.numel() > 0:
+                aux_labels = labels[aux_batch_ids]
+                total = total + aux_loss_weight * criterion(aux_logits, aux_labels)
+
+            if use_xpcr and aux_logits is not None and aux_logits.numel() > 0:
+                total = total + xpcr_weight * xpcr_loss(aux_logits, aux_batch_ids, bs)
+
+            if use_supcon and features is not None and bs >= 2:
+                total = total + supcon_weight * supcon_loss(
+                    features, labels, supcon_temperature
+                )
+
+            if use_kdpe and sample_idx is not None:
+                idx = sample_idx.view(-1).long().cpu()
+                t_probs = teacher_probs[idx].to(device=logits.device)
+                total = total + kdpe_weight * kdpe_loss(
+                    logits, t_probs, kdpe_temperature
+                )
+
+            return total
 
         if use_amp:
             with autocast(str(device).split(":")[0]):
@@ -345,7 +483,10 @@ def collect_predictions(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    use_datr: bool = False,
+    datr_alpha: float = 0.3,
 ) -> dict:
+    """收集预测概率与 loss，支持 V8 DATR 测试时聚合。"""
     model.eval()
     total_loss = 0.0
     all_probs = []
@@ -355,7 +496,17 @@ def collect_predictions(
         batch_data = batch_data.to(device)
         fields = _extract_batch(batch_data)
         labels = fields["labels"]
-        logits = _call_model(model, fields)
+        if use_datr:
+            logits, aux_logits, aux_batch_ids, _ = _call_model(
+                model, fields, return_aux=True, return_features=True
+            )
+            logits = datr_aggregate(
+                logits, aux_logits, aux_batch_ids,
+                batch_size=labels.size(0),
+                alpha=datr_alpha,
+            )
+        else:
+            logits = _call_model(model, fields)
         loss = criterion(logits, labels)
         total_loss += loss.item()
         probs = F.softmax(logits.float(), dim=-1)[:, 1]
@@ -584,6 +735,35 @@ def train(
     supcon_w = config.SCRA_WEIGHT if getattr(config, "USE_SCRA", False) else 0.0
     supcon_t = getattr(config, "SCRA_TEMPERATURE", 0.07)
 
+    # V8: XPCR / DATR / KDPE 配置
+    xpcr_w = config.XPCR_WEIGHT if getattr(config, "USE_XPCR", False) else 0.0
+    use_datr = getattr(config, "USE_DATR", False)
+    datr_alpha = getattr(config, "DATR_ALPHA", 0.3)
+    kdpe_w = config.KDPE_WEIGHT if getattr(config, "USE_KDPE", False) else 0.0
+    kdpe_t = getattr(config, "KDPE_TEMPERATURE", 4.0)
+
+    # 准备 KDPE teacher probs（如启用）
+    teacher_probs = None
+    if kdpe_w > 0:
+        teacher_path = Path(getattr(config, "KDPE_TEACHER_PROBS_PATH", ""))
+        if teacher_path.exists():
+            arr = np.load(teacher_path)
+            teacher_probs = torch.from_numpy(arr).float()
+            if teacher_probs.dim() == 1:
+                # 仅 fake 概率，组装成两列
+                teacher_probs = torch.stack(
+                    [1.0 - teacher_probs, teacher_probs], dim=-1
+                )
+            logger.info(
+                f"KDPE 启用，teacher probs 形状 {tuple(teacher_probs.shape)} "
+                f"来自 {teacher_path}"
+            )
+        else:
+            logger.warning(
+                f"KDPE 启用但 teacher probs 文件不存在: {teacher_path}，自动禁用 KDPE"
+            )
+            kdpe_w = 0.0
+
     logger.info(f"开始训练: {epochs} epochs, device={device}, AMP={use_amp}")
     logger.info(f"BERT 可训练参数: {sum(p.numel() for p in bert_params):,}")
     logger.info(f"其他可训练参数: {sum(p.numel() for p in other_params):,}")
@@ -611,6 +791,11 @@ def train(
         f"SCCG={getattr(config, 'USE_SCCG', False)}, "
         f"SCRA={getattr(config, 'USE_SCRA', False)} (w={supcon_w}, T={supcon_t})"
     )
+    logger.info(
+        f"V8 modules: XPCR={getattr(config, 'USE_XPCR', False)} (w={xpcr_w}), "
+        f"DATR={use_datr} (alpha={datr_alpha}), "
+        f"KDPE={kdpe_w>0} (w={kdpe_w}, T={kdpe_t})"
+    )
     logger.info(f"Grad clip max norm: {config.GRAD_CLIP_MAX_NORM}")
 
     for epoch in range(1, epochs + 1):
@@ -622,10 +807,17 @@ def train(
             ema=ema,
             supcon_weight=supcon_w,
             supcon_temperature=supcon_t,
+            xpcr_weight=xpcr_w,
+            kdpe_weight=kdpe_w,
+            kdpe_temperature=kdpe_t,
+            teacher_probs=teacher_probs,
         )
 
         # ── 验证：原始模型，仅在 thr=0.5 计算指标，用 raw macF1 选 best ──
-        val_pack = collect_predictions(model, val_loader, criterion, device)
+        val_pack = collect_predictions(
+            model, val_loader, criterion, device,
+            use_datr=use_datr, datr_alpha=datr_alpha,
+        )
         val_metrics = metrics_from_probs(
             val_pack["probs"], val_pack["labels"], threshold=0.5
         )
@@ -683,7 +875,10 @@ def train(
         # 创建一个临时副本评估 EMA
         ema_state_backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
         ema.apply_to(model)
-        ema_pack = collect_predictions(model, val_loader, criterion, device)
+        ema_pack = collect_predictions(
+            model, val_loader, criterion, device,
+            use_datr=use_datr, datr_alpha=datr_alpha,
+        )
         ema_metrics = metrics_from_probs(ema_pack["probs"], ema_pack["labels"], threshold=0.5)
         ema_metrics["loss"] = ema_pack["loss"]
         logger.info(
@@ -703,7 +898,10 @@ def train(
         candidates_probs = {}
 
     if swa_model is not None:
-        swa_pack = collect_predictions(swa_model, val_loader, criterion, device)
+        swa_pack = collect_predictions(
+            swa_model, val_loader, criterion, device,
+            use_datr=use_datr, datr_alpha=datr_alpha,
+        )
         swa_metrics = metrics_from_probs(swa_pack["probs"], swa_pack["labels"], threshold=0.5)
         swa_metrics["loss"] = swa_pack["loss"]
         logger.info(
@@ -767,7 +965,10 @@ def train(
             model.load_state_dict(best_ckpt["model_state_dict"])
             test_model = model
 
-        test_pack = collect_predictions(test_model, test_loader, criterion, device)
+        test_pack = collect_predictions(
+            test_model, test_loader, criterion, device,
+            use_datr=use_datr, datr_alpha=datr_alpha,
+        )
         test_metrics = metrics_from_probs(
             test_pack["probs"], test_pack["labels"], threshold=winner_thr
         )

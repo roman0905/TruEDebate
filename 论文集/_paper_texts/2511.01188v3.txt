@@ -1,0 +1,2231 @@
+
+
+===== PAGE 1 =====
+ZoFia: Zero-Shot Fake News Detection with Entity-Guided Retrieval and
+Multi-LLM Interaction
+Lvhua Wu1,2*, Xuefeng Jiang1,2*, Sheng Sun1, Yan Lei1,2, Tian Wen1,2, Yuwei Wang1, Min Liu1,2†
+1Institute of Computing Technology, Chinese Academy of Sciences
+2University of Chinese Academy of Sciences
+{wulvhua24s,jiangxuefeng21b,liumin}@ict.ac.cn
+Abstract
+The rapid spread of fake news threatens so-
+cial stability and public trust, highlighting the
+urgent need for its effective detection.
+Al-
+though large language models (LLMs) show
+potential in fake news detection, they are lim-
+ited by knowledge cutoff and easily gener-
+ate factual hallucinations when handling time-
+sensitive news. Furthermore, the thinking of a
+single LLM easily falls into early stance lock-
+ing and conﬁrmation bias, making it hard to
+handle both content reasoning and fact check-
+ing simultaneously.
+To address these chal-
+lenges, we propose ZoFia, a two-stage zero-
+shot fake news detection framework. In the
+ﬁrst retrieval stage, we propose novel Hierar-
+chical Salience and Salience-Calibrated Min-
+imum Marginal Relevance (SC-MMR) algo-
+rithm to extract core entities accurately, which
+drive dual-source retrieval to overcome knowl-
+edge and evidence gaps.
+In the subsequent
+stage, a multi-agent system conducts multi-
+perspective reasoning and veriﬁcation in par-
+allel and achieves an explainable and robust
+result via adversarial debate. Comprehensive
+experiments on two public datasets show that
+ZoFia outperforms existing zero-shot base-
+lines and even most few-shot methods. Our
+code has been open-sourced to facilitate the re-
+search community at https://github.com/
+SakiRinn/ZoFia.
+1
+Introduction
+The rapid spread of fake news through social net-
+works has become prevalent, posing severe threats
+to key domains such as politics (Fisher et al.,
+2016), economy (Bakir and McStay, 2018), and
+livelihood (Zhou and Zafarani, 2020). The swift
+advancement of generative models further exacer-
+bates this concern (Chen and Shu, 2023; Nan et al.,
+2024; Li et al., 2025, 2024a). In this context, de-
+*Equal contribution.
+†Corresponding author.
+veloping effective, efﬁcient and interpretable fake
+news detection methods is indispensable.
+Early studies mainly rely on supervised learning
+(Monti et al., 2019; Kaliyar et al., 2021) to train
+detection models, but their dependence on large-
+scale labeled data makes it hard to adapt to emerg-
+ing news topics (Hoy and Koulouri, 2022). Large
+language models (LLMs), with broad pretraining
+knowledge and strong contextual understanding
+(Su et al., 2023), signiﬁcantly advance few-shot
+and zero-shot methods, providing new opportu-
+nities to overcome this bottleneck.
+In few-shot
+methods, LLMs either serve as auxiliary tools to
+perform data augmentation for downstream classi-
+ﬁers (Hu et al., 2024a), or act directly as detectors
+through prompt learning (Jiang et al., 2022) and
+instruction tuning (Pavlyshenko, 2023), but they
+still do not fully escape reliance on training data.
+By contrast, zero-shot methods that do not require
+labeled samples are a more promising paradigm,
+which mainly guide LLM reasoning by context en-
+gineering (Zhang and Gao, 2023) and agentic ar-
+chitectures (Li et al., 2024b).
+However, zero-shot methods face reliability
+challenges. On the one hand, the internal knowl-
+edge of LLMs is limited by knowledge cutoff
+(Cheng et al., 2024). Without the external informa-
+tion, they easily produce factual hallucinations (Ji
+et al., 2023) when handling dynamic news events.
+On the other hand, LLMs tend to lock their stance
+early (Echterhoff et al., 2024), where conﬁrma-
+tion bias (Wan et al., 2025) drives subsequent rea-
+soning to merely rationalize the initial judgment
+(Wang et al., 2025). Consequently, when external
+retrieval is introduced into a single LLM, it easily
+takes a cognitive shortcut that substitutes whether
+information can be retrieved for factual veracity,
+which seriously weakens content reasoning on the
+original news. This effect becomes much stronger
+when the retrieved evidence is irrelevant or con-
+tradictory (Tan et al., 2024). Therefore, we ob-
+arXiv:2511.01188v3  [cs.CL]  25 Apr 2026
+
+
+
+===== PAGE 2 =====
+serve that the inherent reasoning defects of a single
+LLM prevent it from performing both news con-
+tent reasoning and external evidence veriﬁcation
+well simultaneously.
+We argue that content reasoning and fact check-
+ing should be decoupled and reliable judgment
+can be achieved through multi-agent interaction.
+Based on this motivation, we propose ZoFia, a
+two-stage zero-shot framework for fake news de-
+tection. In the ﬁrst entity-guided retrieval stage,
+we introduce Hierarchical Salience to address se-
+mantic dilution (Hou et al., 2021) of news entities,
+which fully leverages global and local semantics to
+score entity salience, and design a novel Salience-
+Calibrated Minimum Marginal Relevance (SC-
+MMR) algorithm to accurately extract core enti-
+ties. These entities then drive dual-source retrieval
+from Wikipedia and Open Web to mitigate knowl-
+edge cutoff and effectively suppress hallucinations.
+In the subsequent multi-LLM interaction stage,
+ZoFia assigns agents to perform content reason-
+ing and fact checking in parallel and breaks stance
+locking of a single LLM via adversarial debate, en-
+suring the robustness and interpretability of the ﬁ-
+nal verdict.
+To sum up, our main contributions are outlined
+as follows:
+• We propose ZoFia, a retrieval-augmented
+multi-agent zero-shot framework for fake
+news detection that effectively overcomes the
+inherent reasoning ﬂaws of a single LLM.
+• We introduce a novel granularity-aware met-
+ric Hierarchical Salience and design SC-
+MMR algorithm to extract news entities ac-
+curately for efﬁcient retrieval.
+• Comprehensive experiments on two public
+datasets demonstrate that ZoFia outperforms
+existing zero-shot baselines and even most
+few-shot methods.
+• We open-source our code to facilitate the re-
+search community at https://github.com/
+SakiRinn/ZoFia.
+2
+Related Work
+LLM in Fake News Detection. The application
+of Large Language Models (LLMs) has become
+a research frontier in fake news detection, primar-
+ily divided into few-shot and zero-shot paradigms.
+In few-shot methods, researchers often use LLMs
+as auxiliary tools for data augmentation (Hu et al.,
+2024a; Nan et al., 2024), or as detectors via post-
+training (Jiang et al., 2022; Pavlyshenko, 2023).
+However, these methods fail to completely elimi-
+nate dependence on labeled data. Zero-shot meth-
+ods directly guide model reasoning through con-
+text engineering (Zhang and Gao, 2023) and agen-
+tic architectures (Li et al., 2024b; Liu et al., 2024),
+making judgments without labeled samples. Nev-
+ertheless, these methods fail to address the conﬁr-
+mation bias arising from a single reasoning chain.
+We decouple retrieval from reasoning via a multi-
+role multi-agent system and ﬁnally aggregate all
+evidence for judgment, achieving more compre-
+hensive and robust zero-shot discrimination.
+Multi-Agent System.
+Multi-Agent Systems
+(MAS) have emerged as an effective paradigm to
+enhance LLMs for complex tasks. The pioneering
+work Chateval (Chan et al., 2023) demonstrates
+that MAS improves both the robustness and ac-
+curacy of generation tasks.
+Subsequent studies
+introduce this paradigm to reasoning tasks. For
+instance, COLA (Lan et al., 2024) designs a col-
+laboration framework for stance detection, but
+it remains limited to analyzing the original text.
+TruEDebate (Liu et al., 2025) applies structured
+debate to fake news detection, but its implemen-
+tation tends to cause premature consensus conver-
+gence. Recent agentic systems (Zhang et al., 2026)
+also integrate reasoning more tightly with exter-
+nal knowledge access. Our ZoFia introduces exter-
+nal information retrieval and independent modular
+analysis. This design aims to fundamentally miti-
+gate knowledge cutoff and ensure the diversity and
+independence of arguments and analyses.
+3
+Stage 1: Entity-Guided Retrieval
+This stage aims to acquire reliable external knowl-
+edge and instant factual evidence for the subse-
+quent multi-agent system. It consists of four se-
+quential modules.
+The ﬁrst three modules pre-
+cisely extract a set of core entities from the orig-
+inal news. These entities serve as keywords and
+are concatenated into a query for the ﬁnal re-
+trieval module, which retrieves from Open Web
+and Wikipedia.
+3.1
+Entity Extractor
+This module ﬁrst uses a pre-trained BERT-NER
+(Tjong Kim Sang and De Meulder, 2003) model
+to perform named entity recognition (NER) on
+the news text.
+We adopt a lightweight BERT-
+NER model to obtain stable span-level conﬁdence
+
+
+
+===== PAGE 3 =====
+Paris Hilton and Chris Zylka shared a kiss 
+on the red carpet last night!
+The 36-year-old former reality star and 31-
+year-old The Leftovers actor were in 
+attendance at the 2017 MOCA Gala on 
+Saturday night (April 29) in Los Angeles.
+[... ...]
+BERT-NER
+Hierarchical 
+Salience
+Paris Hilton
+Chris Zylka
+Los Angeles
+The Leftovers
+Cameron
+[... ...]
+Entity: Paris Hilton
+Context: Paris Hilton and 
+Chris Zylka shared a kiss 
+on the red carpet last night!
+[0.346,
+0.425,
+0.127,
+...]
+Wikipedia Information
+SC-MMR
+• Chris Zylka
+• Paris Hilton
+• The Leftovers
+Paris Hilton
+Paris Whitney Hilton (born February 17, 
+1981) is an American media personality, 
+businesswoman, and socialite. [...]
+Chris Zylka (born Christopher Michael 
+Settlemire; May 9, 1985) is an American 
+actor and model, known for [...]
+Chris Zylka
+[... ...]
+(1) Entity-Guided Retrieval
+•
+Sentence: ... ...
+•
+Word: ... ...
+•
+Grammar: ... ...
+•
+Emotion: ... ...
+•
+Information Quality: ...
+Linguist
+•
+The news aligns 
+with known facts 
+about …
+•
+The article 
+logically …
+Expert
+(2) Multi-LLM Interaction
+•
+Paris Hilton and Chris 
+Zylka shared a kiss ...
+•
+Paris Hilton and Chris 
+Zylka attended the 2017 
+MOCA ...
+•
+Other attendees at the 
+2017 MOCA ...
+Claim
+Extractor
+Open Web Information
+Hilton gazes lovingly at boyfriend 
+Chris Zylka | Daily Mail Online
+She recently admitted that she found the 
+one she wants to have children with. And 
+on Saturday, [...]
+[... ...]
+Paris Hilton, Sharon Stone, Ricky 
+Martin & More Best Dressed Celebs 
+at MOCA Gala 2017
+The stars aligned to honor artist Jeff 
+Koons at the 2017 MOCA Gala, with 
+Paris Hilton, Sharon Stone, Ricky Martin 
+and more celebrities.Ryan Seacrest and 
+Shayna Taylor on the red carpet at the 
+2017 MOCA Gala. [...]
+•
+<Real> Paris 
+Hilton and 
+Chris Zylka ...
+•
+<Fake> ...
+•
+<Fake> ...
+•
+<Real> ...
+Claim
+Verifier
+Debater - R
+Debater - F
+I think this news is 
+real, because
+•
+Evidence 1: ... ...
+•
+Evidence 2: ... ...
+•
+Evidence 3: ... ...
+I think this news is 
+fake, because
+•
+Evidence 1: ... ...
+•
+Evidence 2: ... ...
+•
+Evidence 3: ... ...
+Judge
+This news is real.
+(1)
+(2)
+(3)
+(1) + (2) + (3)
+Retrieval
+①
+②
+③
+④
+Score
+Figure 1: Overall architecture of our proposed ZoFia framework.
+scores for dynamic ﬁltering. This process can be
+expressed as:
+{(ti, ei, ci)}N
+i=1 = MBERT-NER(T),
+(1)
+where M is the pre-trained model, T is the input
+news text. (ti, ei, ci) denotes the recognized entity
+triplet, ti is the entity token, ei is the entity label,
+and ci is the conﬁdence score for the correspond-
+ing label, expressed as the conditional probability
+ci = P(ei|ti, T; MBERT-NER).
+Due to the large number of recognized entities,
+we aggregate consecutive entity tokens to form
+new entity units Ue. Its conﬁdence score c(Ue) is
+calculated by averaging the conﬁdence scores of
+all tokens in Ue, expressed as:
+c(Ue) =
+1
+|Ue|
+X
+ti∈Ue
+ci.
+(2)
+We establish a dynamic conﬁdence threshold to se-
+lect entities with high conﬁdence scores.
+Start-
+ing from an initial conﬁdence score λinit, if the
+number of selected entities fails to meet the prede-
+termined minimum nmin, the algorithm iteratively
+lowers the conﬁdence score by ∆λ and repeats the
+selection, until at least nmin entities are obtained.
+3.2
+Salience Scorer
+This module aims to accurately quantify the im-
+portance of news entities, namely Entity Salience
+(ES) (Dunietz and Gillick, 2014). Although the
+prior study (Bullough et al., 2024) has demon-
+strated that bi-encoder architectures can efﬁciently
+estimate entity salience, their performance is of-
+ten limited by semantic dilution (Hou et al., 2021)
+problem, which leads to severe underestimation of
+the importance of key entities.
+We propose a novel Hierarchical Salience that
+avoids a single, coarse evaluation between an en-
+tity and the whole text.
+It decomposes an en-
+tity’s overall importance into two orthogonal and
+multiplicative components: Local Salience Slocal
+and Global Salience Sglobal. Local Salience mea-
+sures the semantic alignment between the entity
+and its immediate context, and Global Salience
+measures how much the local context contributes
+to the text’s main content.
+Formally, for a news text T that is an ordered
+sequence of sentences, consider any entity Ui that
+appears in sentence sj. We deﬁne its local con-
+text as C(Ui) = sj−1 ⊕sj ⊕sj+1. Aligned with
+(Bullough et al., 2024), we use a uniﬁed Sentence-
+BERT (SBERT) (Reimers and Gurevych, 2019)
+encoder MSBERT(·) to embed the entity Ui, its lo-
+cal context C(Ui), and the full text T to vectors
+vUi, vC(Ui), and vT .
+The hierarchical salience
+Shier(Ui) is derived from the product of these two
+components as
+Shier(Ui) =
+vUi · vC(Ui)
+∥vUi∥· ∥vC(Ui)∥
+|
+{z
+}
+Slocal(Ui|C(Ui))
+·
+vC(Ui) · vT
+∥vC(Ui)∥· ∥vT ∥
+|
+{z
+}
+Sglobal(C(Ui)|T )
+.
+(3)
+Hierarchical Salience provides a ﬁner and more
+robust estimate of each entity’s importance to the
+news content. It serves as the key criterion for en-
+tity ﬁltering in subsequent modules.
+3.3
+Keyword Selector
+This module aims to select an informative subset
+of keywords from the candidate entity set Uselected
+
+
+
+===== PAGE 4 =====
+to mitigate the query drift (Carpineto and Ro-
+mano, 2012) problem. However, this process faces
+two practical challenges.
+First, the hierarchical
+salience score Shier(Ui) is highly sensitive to con-
+text granularity, so a ﬁxed screening threshold is
+not effective. Second, coreference in news intro-
+duces high-scoring entities with repeated seman-
+tics, which harms the diversity of the keyword set.
+To optimize relevance and diversity under these
+constraints, we propose an improved MMR (Car-
+bonell and Goldstein, 1998) algorithm, namely
+Salience-Calibrated MMR (SC-MMR). At the
+k-th iteration, SC-MMR evaluates the score of a
+candidate entity Ui by
+MMR(Ui) = λkShier(Ui) −(1 −λk)
+max
+Uj∈Uselected S(Ui, Uj),
+(4a)
+S(Ui, Uj) =
+vUi · vUj
+∥vUi∥∥vUj∥.
+(4b)
+The key innovation of SC-MMR is to introduce a
+weight schedule λk that changes with the number
+of selected keywords k, so that the focus gradually
+shifts from relevance to diversity. We adopt an an-
+nealing schedule with a lower bound:
+λk = max(λmin, λmax −exp(α · k −β)).
+(5)
+This form ensures that λk decreases monotonically
+with k while retaining a non-zero salience weight
+via λmin to prevent the diversity term from fully
+dominating.
+We further introduce a dynamic termination
+rule based on the relative change of the MMR
+score. The iteration continues only when the next
+best candidate U∗
+k+1 satisﬁes MMR(U∗
+k+1) > γ ·
+MMR(U∗
+k), where γ is a decay factor. This design
+prevents the decline in entity quality caused by di-
+minishing marginal utility.
+3.4
+Information Retrieval
+This
+module
+uses
+the
+keyword
+set
+K
+=
+{k1, k2, . . . , kN} distilled in previous modules to
+build a comprehensive external knowledge base
+E, serving as supplementary context for the sub-
+sequent detection stage.
+We implement a dual-
+source retrieval that gathers information from the
+Open Web and Wikipedia in parallel, ensuring
+both timeliness and authority.
+Retrieval from Open Web. We compose all
+keywords into an aggregated query for the Open
+Web Qweb with the following logic:
+Qweb =
+ N
+^
+i=1
+ki
+!
+(6)
+The operator ∧requires that results relate to
+all keywords, which enables strict cross-keyword
+veriﬁcation.
+We explicitly exclude news and
+Wikipedia sources. The former avoids retrieving
+duplicate reports to prevent source contamination
+(Deng et al., 2023), and the latter prevents re-
+dundancy with the subsequent Wikipedia retrieval.
+For each returned page, we only extract its sum-
+mary and search snippet as the raw corpus.
+Retrieval from Wikipedia. The summary sec-
+tion of a Wikipedia entry usually provides the
+most precise deﬁnition for an entity. However, a
+single keyword ki often corresponds to multiple
+Wikipedia entries, which introduces semantic am-
+biguity. We build a context-aware disambigua-
+tion mechanism that uses the original local context
+C(Ui) of keyword ki in the news text to perform
+accurate matching.
+When Wikipedia returns a list with M candidate
+senses O(ki) = {o1, o2, . . . , oM}, the mechanism
+examines each candidate om. It constructs a tem-
+porary modiﬁed context C(Ui ←om) by replac-
+ing the original entity Ui with the description text
+of om. The optimal sense o∗
+i of Ui is deﬁned as
+the option that maximizes the cosine similarity be-
+tween the vector of the original context and the
+vector of the modiﬁed context:
+o∗
+i = arg max
+om∈O(ki)
+vC(Ui) · vC(Ui←om)
+∥vC(Ui)∥∥vC(Ui←om)∥.
+(7)
+where v denotes the context vectors embedded by
+the pretrained SBERT MSBERT. After identifying
+the unique entry, we extract the ﬁrst 3 sentences of
+its summary as supplementary material.
+4
+Stage 2: Multi-LLM Interaction
+The external information provided by entity-
+guided retrieval and the prior knowledge of LLMs
+builds a Multi-Source Information Matrix. This
+stage employs a dual-state multi-LLM system that
+fully exploits this matrix to perform parallel and
+multi-perspective content reasoning and claim ver-
+iﬁcation, which are ﬁnally aggregated to reach a
+robust and interpretable judgment.
+This stage operates in two orthogonal interac-
+tion states. LLM Collaboration performs paral-
+lel analyses across multiple agents to reduce infer-
+ential variance. LLM Debate and Judgment in-
+troduces an adversarial debate to reduce systemic
+bias. These two states form a complete reasoning
+chain from mining divergent evidence to making a
+convergent judgment.
+
+
+
+===== PAGE 5 =====
+4.1
+LLM Collaboration
+LLM Collaboration state aims to reduce inferen-
+tial variance. Through parallel analysis by mul-
+tiple agents, it transforms the Multi-Source In-
+formation Matrix from the previous stage into a
+structured evidence pool, which provides a stable
+decision basis for the subsequent adversarial de-
+bate. As illustrated in Figure 2, the matrix system-
+atically integrates 4 information sources that are
+orthogonal and complementary in evidence distri-
+bution:
+• In-news Information: Comes from the origi-
+nal text of the target news and provides the
+basic core content.
+• Out-of-news Information: Comes from Open
+Web retrieval and provides the most timely
+and broadest materials.
+• LLM internal Knowledge: Comes from the
+model’s prior knowledge and provides gener-
+alized common sense.
+• LLM external Knowledge:
+Comes from
+Wikipedia retrieval and provides the most pre-
+cise summary for the core entities.
+The subsequent analysis decomposes the tasks
+and assigns them to agents with distinct roles, so
+that each agent focuses on a speciﬁc quadrant of
+the matrix for specialized processing.
+Expert
+Claim
+Extractor
+Claim
+Verifier
+Linguist
+LLM Internal Knowledge
+(prior knowledge)
+In-news Information
+(news text)
+Out-of-news Information
+(Open Web)
+LLM External Knowledge
+(Wikipedia)
+Figure 2: The diagram of Multi-Source Information
+Matrix and the quadrants used by LLM agents.
+4.1.1
+Linguist
+Following prior studies (Shahid et al., 2022)(Zhou
+and Zafarani, 2018), the linguist agent is designed
+to systematically divide the text into 5 linguistic
+dimensions that are strongly associated with mis-
+information:
+• Sentence:
+Lexical complexity,
+sentence
+length, and formality of tone.
+• Word: Frequency of superlatives, affective
+language, and pronoun distribution.
+• Grammar: Patterns of reported speech, pas-
+sive voice, and negation.
+• Emotion: Affective terms in the text and the
+headline, and the degree of incendiary tone.
+• Information Quality: Presence of clickbait,
+information overload, or context mismatch.
+To maintain objective independence, each di-
+mension is evaluated in an isolated session. For
+each dimension, the LLM explicitly indicates
+whether it reﬂects the news is real or fake. It uses
+2 quadrants of the Multi-Source Information Ma-
+trix: LLM internal knowledge and in-news infor-
+mation.
+4.1.2
+Domain-Speciﬁc Expert
+It operates in a dynamic and adaptive manner. The
+system ﬁrst identiﬁes the most relevant domain
+from the news text and assigns the agent a precise
+expert role, such as "economist" or "journalist".
+The expert with this role then analyzes along the
+following 2 dimensions:
+• Knowledge
+Concordance:
+Examine
+all
+claims, viewpoints, and details for sound rea-
+soning; identify departures from common
+sense.
+• Logical Integrity:
+Examine argument-to-
+conclusion coherence with domain-speciﬁc
+common sense; identify logical errors or un-
+supported leaps.
+It uses 3 quadrants of the Multi-Source Informa-
+tion Matrix: in-news information, LLM internal
+knowledge, and LLM external knowledge.
+4.1.3
+Claim Veriﬁcation
+Existing research (Niu et al., 2024) demonstrates
+that claim-based fact checking effectively serves
+as a reference for LLM-based detection. In our
+system, a serial pipeline composed of Claim Ex-
+tractor and Claim Veriﬁer deconstructs and veri-
+ﬁes factual claims in the news text. These 2 agents
+use 3 quadrants of the Multi-Source Information
+Matrix: LLM internal knowledge, in-news infor-
+mation, and out-of-news information from Open
+Web.
+Claim Extractor. The Mextractor agent converts
+unstructured news text T into a set of veriﬁable
+structured claims. Its function is formalized as fol-
+lows:
+
+
+
+===== PAGE 6 =====
+Mextractor(T) →{qcore, {qsub1, . . . , qsubm}} (8)
+where qcore is the core claim that determines the
+veracity of the news, and qsub is a collection of sup-
+porting subclaims. All outputs are restated as con-
+cise and objective declarative sentences.
+Claim Veriﬁer. This agent veriﬁes each claim
+q independently.
+To ensure precision and con-
+trol costs (Purwar et al., 2024), a simple retrieval-
+augmented generation (RAG) (Lewis et al., 2020)
+is implemented to build a highly relevant context
+Crel(q) for each q from the Open Web corpus Iweb.
+The context consists of text chunks cj whose co-
+sine similarity with the claim representation vq ex-
+ceeds a threshold θsim:
+Crel(q) = {cj ∈top-k(Iweb, q) |
+vq · vcj
+∥vq∥∥vcj∥≥θsim}.
+(9)
+All decisions are strictly based on Crel(q). The
+ﬁnal output includes a clear label ("Supports", "Re-
+futes", or "Not Enough Information"), a brief rea-
+soning, and evidence directly quoted from Crel(q)
+to suppress hallucinations.
+4.2
+LLM Debate and Judgment
+LLM Debate and Judgment state aims to suppress
+systemic bias. We introduce a multi-round adver-
+sarial debate framework that forces LLMs to ex-
+plore both supporting and refuting views of the
+truthfulness of news equally. This design directly
+mitigates the thought degeneration (DoT) (Liang
+et al., 2023) phenomenon that often appears in a
+single linear reasoning chain.
+Algorithm 1. Dynamic Adversarial Debate
+Input: E: The complete evidence pool
+Output: D: The ﬁnal decision {Real, Fake}
+H ←∅; Acon ←null; D ←Insufﬁcient
+while D = Insufﬁcient do
+Apro ←Mpro.GenerateArgument(E, Acon)
+Acon ←Mcon.GenerateArgument(E, Apro)
+H ←H ∪{(Apro, Acon)}
+D ←Judge.Assess(H)
+return D
+As shown in Algorithm 1, a pair of debate
+agents Mpro and Mcon act as opposing reasoners
+based on the evidence pool E. In each round, the
+active debater ﬁrst rebuts the opponent’s last ar-
+gument and then presents a new argument. After
+each exchange, a judge agent evaluates the debate
+history H and outputs a ternary judgment D.
+This dynamic termination mechanism ensures
+that the debate stops once the information is sufﬁ-
+cient for decision, effectively balancing the depth
+and efﬁciency of reasoning. The debate history H
+provides a traceable reasoning chain composed of
+pro. and con. arguments, making the ﬁnal judg-
+ment highly interpretable.
+5
+Experiment
+5.1
+Experimental Setting
+Datasets.
+Following previous state-of-the-art
+work (Liu et al., 2024), our experiments are
+conducted on two widely recognized fake news
+datasets: GossipCop and PolitiFact (Shu et al.,
+2020).
+GossipCop focuses on entertainment,
+mainly Hollywood celebrity news; PolitiFact fo-
+cuses on politics, drawing on fact-checks of U.S.
+political ﬁgures. Considering that some links in
+the initial dataset have become invalid, we adopt
+the available version publicly re-released in (Su
+et al., 2023).
+Metrics. We use accuracy and macro F1-Score
+as evaluation metrics. F1-Score is less affected by
+data imbalance, so it serves as the primary metric
+for assessment.
+Baselines. We incorporate two groups of base-
+lines. The ﬁrst group includes advanced few-shot
+methods: PSM (Ni et al., 2020), MDFEND (Nan
+et al., 2021), ARG (Hu et al., 2024b), DKFND
+(Liu et al., 2024), and KPL (Jiang et al., 2022),
+with reliable metrics from the existing works (Jin
+et al., 2024; Hu et al., 2024c; Liu et al., 2024). The
+second group consists of representative zero-shot
+methods for comparison: Auto-CoT (Zhang et al.,
+2022), ReAct (Yao et al., 2023) equipped with a
+search API, HiSS (Zhang and Gao, 2023), Web
+Retrieval Agents (Tian et al., 2024), FactAgent (Li
+et al., 2024b), and CAPE-FND (Jin et al., 2025).
+We implement ZoFia based on DeepSeek-v3
+(DeepSeekAI, 2024), GPT-4o-mini (OpenAI, 2024)
+and Qwen3-32B (Team, 2025), and compare it
+with only-LLM inference. All other LLM-based
+zero-shot methods are based on DeepSeek-v3.
+Implementation details. We set the dynamic
+threshold of entity extraction as λinit = 0.8 and
+∆λ = 0.1 and the decay factor of MMR as γ =
+0.5. The maximum number of entries for Open
+Web retrieval is 10; for Wikipedia, we retrieve the
+ﬁrst 3 sentences for each entry. The minimum sim-
+ilarity threshold for claim extraction is θsim = 0.1.
+The NER model is selected as dslim/bert-base-NER
+
+
+
+===== PAGE 7 =====
+Table 1: Accuracy (Acc.) and F1-Score (F1) comparison of few-shot / zero-shot methods on PolitiFact and
+GossipCop. The bold and underlined denote the best and second-best performance.
+Category
+Method
+LLM Usage
+PolitiFact
+GossipCop
+Accuracy
+F1-Score
+Accuracy
+F1-Score
+Few-shot
+PSM (Nan et al., 2021)
+Non-LLM
+70.00
+49.15
+77.44
+41.73
+MDFEND (Nan et al., 2021)
+Non-LLM
+65.50
+62.30
+41.27
+40.20
+KPL (Jiang et al., 2022)
+Non-LLM
+58.33
+60.40
+42.71
+42.08
+ARG (Hu et al., 2024b)
+LLM-assisted
+74.00
+67.16
+61.41
+42.32
+DKFND (Liu et al., 2024)
+LLM-assisted
+87.00
+82.43
+82.37
+55.22
+Zero-shot
+Auto-CoT (Zhang et al., 2022)
+LLM-based
+89.65
+73.67
+60.01
+48.15
+ReAct (Search API) (Yao et al., 2023)
+LLM-based
+74.73
+67.64
+74.03
+47.30
+HiSS (Zhang and Gao, 2023)
+LLM-based
+64.82
+56.80
+68.81
+40.40
+Web Retrieval Agents (Tian et al., 2024)
+LLM-based
+77.83
+64.88
+66.62
+46.54
+FactAgent (Li et al., 2024b)
+LLM-based
+80.59
+70.06
+73.80
+56.22
+CAPE-FND (Jin et al., 2025)
+LLM-based
+76.81
+62.43
+63.79
+49.17
+DeepSeek-v3 (DeepSeekAI, 2024)
+Only-LLM
+78.99
+40.24
+61.03
+28.17
+GPT-4o-mini (OpenAI, 2024)
+Only-LLM
+73.58
+41.66
+66.73
+33.18
+Qwen3-32B (Team, 2025)
+Only-LLM
+76.57
+43.35
+63.82
+32.45
+ZoFia (DeepSeek-v3)
+LLM-based
+91.52
+87.88
+79.04
+61.22
+ZoFia (GPT-4o-mini)
+LLM-based
+75.28
+75.19
+68.90
+56.20
+ZoFia (Qwen3-32B)
+LLM-based
+84.06
+81.76
+69.71
+59.07
+(Tjong Kim Sang and De Meulder, 2003), and
+the SBERT model is selected as all-MiniLM-L6-v2
+(Reimers and Gurevych, 2019).
+For all base
+LLMs, we set the temperature to 0.
+Brave API1 is selected as Open Web retrieval
+API. To strictly prevent label information leak-
+age, we set the search cutoff date to the day be-
+fore the publication date of each sample URL and
+exclude dataset-associated fact-checking domains
+from open-web retrieval (gossipcop.com, politi-
+fact.com, and snopes.com).
+5.2
+Main Experiment
+ZoFia demonstrates exceptional performance on
+both datasets as shown in Table 1, consistently out-
+performing existing zero-shot and few-shot base-
+lines.
+On the fact-intensive PolitiFact dataset,
+ZoFia’s advantages are particularly pronounced,
+with its accuracy (91.52%) and F1-Score (87.88%)
+not only far exceeding other zero-shot methods but
+also surpassing all few-shot baselines by a substan-
+tial performance margin.
+The detection task on the GossipCop dataset
+presents greater challenges, as its content of-
+ten proves difﬁcult to verify due to subjectivity
+and factual ambiguity.
+In this scenario, ZoFia
+achieves the highest F1-Score (61.22%), surpass-
+ing all baseline models.
+Although DKFND at-
+tains slightly higher accuracy, its F1-Score is no-
+1https://brave.com/search/api/
+tably lower. In contrast, ZoFia’s superior F1-Score
+demonstrates more balanced and robust detection
+performance across both true and fake news cate-
+gories while maintaining high precision.
+The results clearly show that as a zero-shot
+method, ZoFia consistently outperforms all zero-
+shot baselines and even most few-shot methods.
+Compared to only-LLM inference, ZoFia provides
+stable and substantial performance gains, demon-
+strating the superiority of its architecture.
+5.3
+Ablation Study
+To assess the contribution of each component in
+ZoFia, we conduct ablation studies on GossipCop
+with DeepSeek-v3 and Qwen3-32B. As shown in
+Table 2, removing Open Web retrieval causes clear
+degradation in both settings, which shows that
+timely external evidence is essential for both base
+models.
+Removing all retrieval sources further
+lowers F1-Score to 58.26% on DeepSeek-v3 and
+50.85% on Qwen3-32B. In LLM collaboration, re-
+moving either the linguist or the expert weakens
+the framework, and the expert contributes more;
+removing both leads to a larger cumulative drop.
+Removing debate also consistently reduces F1-
+Score, which shows that it helps mitigate single-
+perspective bias. The F1-Score drops by 2.06% on
+DeepSeek-v3 and by 5.00% on Qwen3-32B, and
+this larger drop suggests that the smaller model is
+more sensitive to the loss of this mechanism.
+
+
+
+===== PAGE 8 =====
+Table 2: Ablation study results on GossipCop. (ACC.:
+Accuracy, F1: F1-Score)
+Component
+DeepSeek-v3
+Qwen3-32B
+Acc.
+F1
+Acc.
+F1
+ZoFia
+79.04
+61.22
+69.71
+59.07
+w/o Wikipedia retrieval
+77.67
+59.90
+68.09
+56.58
+w/o Open Web retrieval
+71.71
+58.14
+64.18
+52.47
+w/o All retrievals
+71.37
+58.26
+62.65
+50.85
+w/o Linguist analysis
+77.86
+58.87
+67.55
+54.62
+w/o Expert analysis
+76.77
+57.32
+66.87
+54.39
+w/o All analyses
+73.51
+57.90
+63.82
+52.71
+w/o Claim veriﬁcation
+79.23
+60.50
+67.48
+55.17
+w/o Debate
+75.01
+59.16
+67.13
+54.07
+Table 3: Effectiveness of query construction variants
+in ZoFia on GossipCop.
+Method
+Accuracy
+F1-Score
+ZoFia
+69.71
+59.07
+ZoFia (w/o All retrievals)
+62.65
+50.85
+ZoFia (TF-IDF)
+66.97
+53.38
+ZoFia (PromptNER)
+63.08
+55.13
+ZoFia (Only-LLM NER)
+61.69
+52.74
+ZoFia (Sentence Salience)
+68.64
+46.15
+ZoFia (Core Claim)
+66.65
+48.81
+ZoFia (OR Composition)
+64.89
+52.26
+5.4
+Effectiveness of Entity-Guided Retrieval
+To verify the effectiveness of entity-guided re-
+trieval in ZoFia, we ﬁx the second stage and vary
+only how the query is constructed on GossipCop
+with Qwen3-32B. TF-IDF (Sparck Jones, 1972),
+PromptNER (Ashok and Lipton, 2023), and Only-
+LLM NER still build queries from keywords, but
+replace the entity acquisition mechanism, and their
+F1-Scores drop by 5.69%, 3.94%, and 6.33% rela-
+tive to ZoFia. Sentence Salience (Bullough et al.,
+2024), Core Claim, and OR Composition instead
+use sentence-level queries or relax conjunctive
+matching from AND (∧) to OR (∨), and their F1-
+Scores fall by 12.92%, 10.26%, and 6.81%. These
+results show that the gain does not come from ar-
+bitrary keyword lists, and it depends on accurate
+entity extraction and strict entity-level constraints,
+which make the original conjunctive entity-guided
+query the most effective design.
+5.5
+Sensitivity Analysis of SC-MMR
+To motivate the design of the dynamic weight λk,
+we ﬁrst conduct an experiment with the weight
+ﬁxed at λ = 0.5 to observe the direct impact of
+the keyword count k on performance. As shown in
+Figure 3, the F1-Score remains stable when k ≤6
+but drops sharply beyond this point.
+1
+2
+3
+4
+5
+6
+7
+8
+k
+30
+35
+40
+45
+50
+55
+F1-Score (%)
+Accuracy
+F1-Score
+50
+60
+70
+80
+Accuracy (%)
+Figure 3: The effect of the number of keywords k on
+performance (F1-Score).
+This phenomenon reveals an inﬂection point:
+when the number of keywords exceeds 6, the risk
+of introducing noise and redundancy begins to out-
+weigh the beneﬁts of new information. It suggests
+that the strategic focus must shift from relevance to
+diversity near the critical inﬂection point of k ≈6.
+Consequently, we adopt the annealing schedule
+form deﬁned in Equation 5 and determine its pa-
+rameters as α = 0.3 and β = 2.5 to ﬁt this down-
+ward trend.
+5.6
+Efﬁciency of Token Utilization
+To investigate ZoFia’s reasoning efﬁciency, a con-
+trolled comparison experiment is conducted. We
+provide CoT (Wei et al., 2022), FactAgent (Li
+et al., 2024b), and ZoFia with the same materials
+and impose a uniﬁed limit on output tokens to eval-
+uate their performance. Since ZoFia cannot com-
+plete full reasoning below 400 tokens, we set its
+evaluation range to 400 tokens and above.
+200
+400
+600
+800
+1000
+1200
+Tokens
+45
+48
+51
+54
+57
+60
+F1-Score (%)
+CoT
+FactAgent
+ZoFia
+Figure 4:
+Performance (F1-Score) comparison of
+methods under maximum output token limits.
+The results are shown in Figure 4. At all bud-
+get points above 400 tokens, ZoFia achieves a
+clearly higher F1-Score than other baseline meth-
+
+
+
+===== PAGE 9 =====
+ods, which demonstrates high reasoning efﬁciency.
+In contrast to CoT and FactAgent, whose perfor-
+mance saturates after around 600 tokens, ZoFia
+shows a stable upward trend even at 1200 tokens.
+This indicates that ZoFia can consistently convert
+tokens into performance gains within an accept-
+able budget.
+Note that this experiment only constrains output
+tokens, because prompt caching (Gim et al., 2024)
+can extensively amortize input overhead, making
+output cost more critical for efﬁciency.
+6
+Conclusion
+In this paper, we propose ZoFia, a retrieval-
+augmented multi-agent zero-shot framework for
+fake news detection, to address the cognitive con-
+ﬂict of a single LLM between content reasoning
+and fact checking. It ﬁrst utilizes our novel Hi-
+erarchical Salience and Salience-Calibrated Min-
+imum Marginal Relevance (SC-MMR) algorithm
+to accurately extract core entities from news text,
+which then guide dual-source retrieval from Open
+Web and Wikipedia.
+Next, the multi-agent sys-
+tem conducts analysis and veriﬁcation in parallel
+and makes a ﬁnal verdict via adversarial debate.
+This process effectively reduces conﬁrmation bias
+from a single reasoning perspective and ensures
+robust and explainable results. Comprehensive ex-
+periments on two public datasets show that ZoFia
+outperforms existing zero-shot baselines in both
+performance and efﬁciency.
+Limitations
+Though ZoFia shows strong detection capabilities,
+its application and evaluation face multiple con-
+straints. Due to copyright and privacy concerns,
+there has been a recent lack of high-quality, contin-
+uously updated public datasets. It prevents us from
+evaluating ZoFia on the most recent news. Build-
+ing the next generation of benchmark datasets that
+meet ethical standards and reﬂect real-world infor-
+mation dynamics is a critical step in this ﬁeld.
+The efﬁciency of using external retrieval can
+also be improved.
+Since it is not our main fo-
+cus, we integrate only a lightweight retrieval-
+augmented generation (RAG) module for claim
+veriﬁcation.
+Future work that adopts more ad-
+vanced RAG architectures, such as a re-ranking
+model and more advanced mechanisms, may fur-
+ther strengthen the exploitation of external knowl-
+edge. We plan to conduct more comprehensive
+benchmark evaluations of the detection capabili-
+ties of LLMs and multi-agent systems for fake
+news (Guo et al., 2025; Kuntur et al., 2024; Jiang
+et al., 2024).
+ZoFia currently focuses on the text modality.
+Modern misinformation increasingly appears in
+multi-modal form that combines images and text.
+Extending ZoFia to the multimodal domain has
+strong potential. One direction is to introduce vi-
+sion language models (VLMs) as a dedicated vi-
+sual expert.
+Another is to study how different
+modalities interact during the debate process to
+achieve effective fusion.
+Acknowledgments
+This work was supported by the National Natural
+Science Foundation of China (No. 62472410). We
+thank the reviewers and chairs for their construc-
+tive feedback.
+References
+Dhananjay Ashok and Zachary C Lipton. 2023.
+Promptner: Prompting for named entity recognition.
+arXiv preprint arXiv:2305.15444.
+Vian Bakir and Andrew McStay. 2018. Fake news and
+the economy of emotions: Problems, causes, solu-
+tions. Digital journalism, 6(2):154–175.
+Benjamin Bullough, Harrison Lundberg, Chen Hu, and
+Weihang Xiao. 2024. Predicting entity salience in
+extremely short documents. In Proceedings of the
+2024 Conference on Empirical Methods in Natural
+Language Processing: Industry Track, pages 50–64.
+Jaime Carbonell and Jade Goldstein. 1998. The use of
+mmr, diversity-based reranking for reordering doc-
+uments and producing summaries. In Proceedings
+of the 21st annual international ACM SIGIR confer-
+ence on Research and development in information
+retrieval, pages 335–336.
+Claudio Carpineto and Giovanni Romano. 2012. A sur-
+vey of automatic query expansion in information re-
+trieval. Acm Computing Surveys (CSUR), 44(1):1–
+50.
+Chi-Min Chan, Weize Chen, Yusheng Su, Jianxuan Yu,
+Wei Xue, Shanghang Zhang, Jie Fu, and Zhiyuan
+Liu. 2023. Chateval: Towards better llm-based eval-
+uators through multi-agent debate. arXiv preprint
+arXiv:2308.07201.
+Canyu Chen and Kai Shu. 2023. Can llm-generated
+misinformation be detected?
+arXiv preprint
+arXiv:2309.13788.
+
+
+
+===== PAGE 10 =====
+Jeffrey Cheng, Marc Marone, Orion Weller, Dawn
+Lawrie, Daniel Khashabi, and Benjamin Van Durme.
+2024.
+Dated data:
+Tracing knowledge cut-
+offs in large language models.
+arXiv preprint
+arXiv:2403.12958.
+DeepSeekAI. 2024.
+Deepseekv3 technical report.
+Preprint, arXiv:2412.19437.
+Chunyuan Deng, Yilun Zhao, Xiangru Tang, Mark Ger-
+stein, and Arman Cohan. 2023. Investigating data
+contamination in modern benchmarks for large lan-
+guage models. arXiv preprint arXiv:2311.09783.
+Jesse Dunietz and Dan Gillick. 2014.
+A new entity
+salience task with millions of training examples. In
+Proceedings of the 14th Conference of the European
+Chapter of the Association for Computational Lin-
+guistics, volume 2: Short Papers, pages 205–209.
+Jessica Maria Echterhoff, Yao Liu, Abeer Alessa, Ju-
+lian McAuley, and Zexue He. 2024. Cognitive bias
+in decision-making with llms.
+In Findings of the
+association for computational linguistics: EMNLP
+2024, pages 12640–12653.
+Marc Fisher, John Woodrow Cox, and Peter Hermann.
+2016. Pizzagate: From rumor, to hashtag, to gunﬁre
+in dc. Washington Post, 6:8410–8415.
+In Gim, Guojun Chen, Seung-seob Lee, Nikhil Sarda,
+Anurag Khandelwal, and Lin Zhong. 2024. Prompt
+cache: Modular attention reuse for low-latency in-
+ference. Proceedings of Machine Learning and Sys-
+tems, 6:325–338.
+Hao Guo, Zihan Ma, Zhi Zeng, Minnan Luo, Weixin
+Zeng, Jiuyang Tang, and Xiang Zhao. 2025. Each
+fake news is fake in its own way: An attribution
+multi-granularity benchmark for multimodal fake
+news detection. In Proceedings of the AAAI Con-
+ference on Artiﬁcial Intelligence, volume 39, pages
+228–236.
+Feng Hou,
+Ruili Wang,
+Jun He,
+and Yi Zhou.
+2021.
+Improving entity linking through seman-
+tic reinforced entity embeddings.
+arXiv preprint
+arXiv:2106.08495.
+Nathaniel Hoy and Theodora Koulouri. 2022. Explor-
+ing the generalisability of fake news detection mod-
+els. In 2022 IEEE International Conference on Big
+Data (Big Data), pages 5731–5740. IEEE.
+Beizhe Hu, Qiang Sheng, Juan Cao, Yuhui Shi, Yang
+Li, Danding Wang, and Peng Qi. 2024a. Bad actor,
+good advisor: Exploring the role of large language
+models in fake news detection. In Proceedings of
+the AAAI Conference on Artiﬁcial Intelligence, vol-
+ume 38, pages 22105–22113.
+Beizhe Hu, Qiang Sheng, Juan Cao, Yuhui Shi, Yang
+Li, Danding Wang, and Peng Qi. 2024b. Bad actor,
+good advisor: Exploring the role of large language
+models in fake news detection. In Proceedings of
+the AAAI conference on artiﬁcial intelligence, vol-
+ume 38, pages 22105–22113.
+Weiqi Hu, Ye Wang, Yan Jia, Qing Liao, and Bin Zhou.
+2024c. A multi-modal prompt learning framework
+for early detection of fake news. In Proceedings of
+the International AAAI Conference on Web and So-
+cial Media, volume 18, pages 651–662.
+Ziwei Ji, Nayeon Lee, Rita Frieske, Tiezheng Yu, Dan
+Su, Yan Xu, Etsuko Ishii, Ye Jin Bang, Andrea
+Madotto, and Pascale Fung. 2023. Survey of hallu-
+cination in natural language generation. ACM com-
+puting surveys, 55(12):1–38.
+Gongyao Jiang, Shuang Liu, Yu Zhao, Yueheng Sun,
+and Meishan Zhang. 2022. Fake news detection via
+knowledgeable prompt learning.
+Information Pro-
+cessing & Management, 59(5):103029.
+Xuefeng Jiang, Lvhua Wu, Sheng Sun, Jia Li, Jingjing
+Xue, Yuwei Wang, Tingting Wu, and Min Liu. 2024.
+Investigating large language models for code vul-
+nerability detection: An experimental study. arXiv
+preprint arXiv:2412.18260.
+Weiqiang Jin, Yang Gao, Tao Tao, Xiujun Wang,
+Ningwei Wang,
+Baohai Wu,
+and Biao Zhao.
+2025.
+Veracity-oriented context-aware large lan-
+guage modelsbased prompting optimization for fake
+news detection. International Journal of Intelligent
+Systems, 2025(1):5920142.
+Yiqiao Jin, Minje Choi, Gaurav Verma, Jindong Wang,
+and Srijan Kumar. 2024. Mm-soc: Benchmarking
+multimodal large language models in social media
+platforms. arXiv preprint arXiv:2402.14154.
+Rohit Kumar Kaliyar, Anurag Goswami, and Pratik
+Narang. 2021. Fakebert: Fake news detection in so-
+cial media with a bert-based deep learning approach.
+Multimedia tools and applications, 80(8):11765–
+11788.
+Soveatin Kuntur, Anna Wr ˘Ałblewska, Marcin Paprzy-
+cki, and Maria Ganzha. 2024.
+Fake news de-
+tection:
+It’s all in the data!
+arXiv preprint
+arXiv:2407.02122.
+Xiaochong Lan, Chen Gao, Depeng Jin, and Yong
+Li. 2024. Stance detection with collaborative role-
+infused llm-based agents. In Proceedings of the in-
+ternational AAAI conference on web and social me-
+dia, volume 18, pages 891–903.
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio
+Petroni, Vladimir Karpukhin, Naman Goyal, Hein-
+rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-
+täschel, and 1 others. 2020.
+Retrieval-augmented
+generation for knowledge-intensive nlp tasks.
+Ad-
+vances in neural information processing systems,
+33:9459–9474.
+Jia Li, Lijie Hu, Zhixian He, Jingfeng Zhang, Tianhang
+Zheng, and Di Wang. 2024a. Text guided image edit-
+ing with automatic concept locating and forgetting.
+arXiv preprint arXiv:2405.19708.
+
+
+
+===== PAGE 11 =====
+Jia Li, Lijie Hu, Jingfeng Zhang, Tianhang Zheng, Hua
+Zhang, and Di Wang. 2025. Fair text-to-image dif-
+fusion via fair mapping. In Proceedings of the AAAI
+Conference on Artiﬁcial Intelligence, volume 39,
+pages 26256–26264.
+Xinyi Li, Yongfeng Zhang, and Edward C Malthouse.
+2024b. Large language model agent for fake news
+detection. arXiv preprint arXiv:2405.01593.
+Tian Liang, Zhiwei He, Wenxiang Jiao, Xing Wang,
+Yan Wang, Rui Wang, Yujiu Yang, Shuming Shi, and
+Zhaopeng Tu. 2023. Encouraging divergent think-
+ing in large language models through multi-agent de-
+bate. arXiv preprint arXiv:2305.19118.
+Ye Liu, Jiajun Zhu, Kai Zhang, Haoyu Tang, Yanghai
+Zhang, Xukai Liu, Qi Liu, and Enhong Chen. 2024.
+Detect, investigate, judge and determine: A novel
+llm-based framework for few-shot fake news detec-
+tion. arXiv preprint arXiv:2407.08952.
+Yuhan Liu, Yuxuan Liu, Xiaoqing Zhang, Xiuying
+Chen, and Rui Yan. 2025. The truth becomes clearer
+through debate! multi-agent systems with large lan-
+guage models unmask fake news. In Proceedings
+of the 48th International ACM SIGIR Conference on
+Research and Development in Information Retrieval,
+pages 504–514.
+Federico Monti, Fabrizio Frasca, Davide Eynard, Da-
+mon Mannion, and Michael M Bronstein. 2019.
+Fake news detection on social media using geomet-
+ric deep learning. arXiv preprint arXiv:1902.06673.
+Qiong Nan, Juan Cao, Yongchun Zhu, Yanyan Wang,
+and Jintao Li. 2021. Mdfend: Multi-domain fake
+news detection. In Proceedings of the 30th ACM in-
+ternational conference on information & knowledge
+management, pages 3343–3347.
+Qiong Nan, Qiang Sheng, Juan Cao, Beizhe Hu, Dand-
+ing Wang, and Jintao Li. 2024. Let silence speak:
+Enhancing fake news detection with generated com-
+ments from large language models. In Proceedings
+of the 33rd ACM International Conference on Infor-
+mation and Knowledge Management, pages 1732–
+1742.
+Bo Ni, Zhichun Guo, Jianing Li, and Meng Jiang. 2020.
+Improving generalizability of fake news detection
+methods using propensity score matching.
+arXiv
+preprint arXiv:2002.00838.
+Cheng Niu, Yang Guan, Yuanhao Wu, Juno Zhu, Jun-
+tong Song, Randy Zhong, Kaihua Zhu, Siliang Xu,
+Shizhe Diao, and Tong Zhang. 2024. Veract scan:
+Retrieval-augmented fake news detection with justi-
+ﬁable reasoning. arXiv preprint arXiv:2406.10289.
+OpenAI. 2024.
+Gpt-4o-mini.
+https://platform.
+openai.com/docs/models. Accessed: 2024-10.
+Bohdan M Pavlyshenko. 2023. Analysis of disinforma-
+tion and fake news detection using ﬁne-tuned large
+language model. arXiv preprint arXiv:2309.04704.
+Anupam Purwar and 1 others. 2024. Evaluating the ef-
+ﬁcacy of open-source llms in enterprise-speciﬁc rag
+systems: A comparative study of performance and
+scalability. arXiv preprint arXiv:2406.11424.
+Nils Reimers and Iryna Gurevych. 2019.
+Sentence-
+bert:
+Sentence embeddings using siamese bert-
+networks. arXiv preprint arXiv:1908.10084.
+Wajiha Shahid,
+Bahman Jamshidi,
+Saqib Hakak,
+Haruna Isah, Wazir Zada Khan, Muhammad Khur-
+ram Khan, and Kim-Kwang Raymond Choo. 2022.
+Detecting and mitigating the dissemination of fake
+news:
+Challenges and future research opportuni-
+ties.
+IEEE Transactions on Computational Social
+Systems, 11(4):4649–4662.
+Kai Shu, Deepak Mahudeswaran, Suhang Wang, Dong-
+won Lee, and Huan Liu. 2020. Fakenewsnet: A data
+repository with news content, social context, and
+spatiotemporal information for studying fake news
+on social media. Big data, 8(3):171–188.
+Karen Sparck Jones. 1972. A statistical interpretation
+of term speciﬁcity and its application in retrieval.
+Journal of documentation, 28(1):11–21.
+Jinyan Su, Claire Cardie, and Preslav Nakov. 2023.
+Adapting fake news detection to the era of large lan-
+guage models. arXiv preprint arXiv:2311.04917.
+Hexiang Tan, Fei Sun, Wanli Yang, Yuanzhuo Wang,
+Qi Cao, and Xueqi Cheng. 2024. Blinded by gen-
+erated contexts: How language models merge gen-
+erated and retrieved contexts when knowledge con-
+ﬂicts? arXiv preprint arXiv:2401.11911.
+Qwen Team. 2025. Qwen3 technical report. Preprint,
+arXiv:2505.09388.
+Jacob-Junqi Tian, Hao Yu, Yury Orlovskiy, Tyler
+Vergho, Mauricio Rivera, Mayank Goel, Zachary
+Yang, Jean-Francois Godbout, Reihaneh Rabbany,
+and Kellin Pelrine. 2024.
+Web retrieval agents
+for evidence-based misinformation detection. arXiv
+preprint arXiv:2409.00009.
+Erik F. Tjong Kim Sang and Fien De Meulder.
+2003. Introduction to the CoNLL-2003 shared task:
+Language-independent named entity recognition. In
+Proceedings of the Seventh Conference on Natu-
+ral Language Learning at HLT-NAACL 2003, pages
+142–147.
+Yue Wan, Xiaowei Jia, and Xiang Lorraine Li. 2025.
+Unveiling conﬁrmation bias in chain-of-thought rea-
+soning. arXiv preprint arXiv:2506.12301.
+Keyu Wang, Jin Li, Shu Yang, Zhuoran Zhang, and
+Di Wang. 2025. When truth is overridden: Uncov-
+ering the internal origins of sycophancy in large lan-
+guage models. arXiv preprint arXiv:2508.02087.
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten
+Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou,
+and 1 others. 2022.
+Chain-of-thought prompting
+
+
+
+===== PAGE 12 =====
+elicits reasoning in large language models.
+Ad-
+vances in neural information processing systems,
+35:24824–24837.
+Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak
+Shafran, Karthik Narasimhan, and Yuan Cao. 2023.
+React: Synergizing reasoning and acting in language
+models. Preprint, arXiv:2210.03629.
+Wenyuan Zhang, Xinghua Zhang, Haiyang Yu, Shuaiyi
+Nie, Bingli Wu, Juwei Yue, Tingwen Liu, and
+Yongbin Li. 2026.
+Expseek:
+Self-triggered
+experience seeking for web agents.
+Preprint,
+arXiv:2601.08605.
+Xuan Zhang and Wei Gao. 2023. Towards llm-based
+fact veriﬁcation on news claims with a hierarchi-
+cal step-by-step prompting method. arXiv preprint
+arXiv:2310.00305.
+Zhuosheng Zhang, Aston Zhang, Mu Li, and Alex
+Smola.
+2022.
+Automatic
+chain
+of
+thought
+prompting in large language models.
+Preprint,
+arXiv:2210.03493.
+Xinyi Zhou and Reza Zafarani. 2018. Fake news: A
+survey of research, detection methods, and opportu-
+nities. arXiv preprint arXiv:1812.00315, 2:13.
+Xinyi Zhou and Reza Zafarani. 2020. A survey of fake
+news: Fundamental theories, detection methods, and
+opportunities.
+ACM Computing Surveys (CSUR),
+53(5):1–40.
+A
+Implementation Details of Modules in
+Entity-Guided Retrieval
+A.1
+Entity Extraction
+The goal of entity extraction is to provide a stable
+set of semantic anchors for subsequent retrieval.
+To prevent retrieval link failures caused by entity
+sparsity or conﬁdence distribution shifts, we intro-
+duce dynamic conﬁdence threshold ﬁltering after
+extraction, maintaining a controllable balance be-
+tween the quality and usability of the entity set.
+Algorithm 2 details the implementation of this
+process.
+The inputs are the news text T , the
+Named Entity Recognition (NER) model MNER,
+an initial threshold τ0, and a threshold decay step
+∆. The output is the ﬁltered entity set Esel. The
+algorithm ﬁrst runs NER on the full text to ob-
+tain the raw entity set Eraw = MNER(T ), where
+each entity e comes with a model conﬁdence score
+e.ner_score that characterizes the reliability of the
+entity boundary and type prediction.
+If Eraw is
+empty, the algorithm directly returns an empty set.
+This indicates that the text lacks identiﬁable entity
+signals or the model cannot provide reliable pre-
+dictions, in which case the retrieval stage should
+degrade to coarser-grained information clues or
+skip the entity-guided strategy.
+When Eraw is not empty, the algorithm em-
+ploys dynamic threshold ﬁltering to construct
+Esel.
+Speciﬁcally, it starts with a high initial
+threshold τ0 and retains only entities satisfying
+e.ner_score ≥τ, prioritizing entity quality and
+precision.
+If Esel remains empty under the cur-
+rent threshold, the threshold decreases stepwise
+by ∆until the system selects at least one entity
+or the threshold drops to a lower bound of 0.1.
+This mechanism reﬂects a clear constraint: en-
+tity extraction must provide a non-empty seman-
+tic entry point for subsequent retrieval; otherwise,
+retrieval degenerates into anchor-less generalized
+queries. Meanwhile, the lower bound threshold
+0.1 prevents the uncontrolled introduction of low-
+conﬁdence noisy entities, thereby maintaining a
+baseline quality while ensuring usability.
+Dynamic threshold ﬁltering transforms entity
+selection from a ﬁxed hyperparameter setting into
+a sample-adaptive process. This enables the sys-
+tem to cover both entity-dense and entity-sparse
+news narratives, providing a stable candidate foun-
+dation for subsequent Hierarchical Salience and
+SC-MMR.
+Algorithm
+2.
+Entity
+Extraction
+and
+Dynamic-Threshold Filtering
+Input: T : News text;
+MNER: NER model;
+τ0: Initial conﬁdence threshold;
+∆: Threshold decay step
+Output: Esel: Selected entity set
+Eraw ←MNER(T )
+if Eraw = ∅then
+return ∅
+τ ←τ0; Esel ←∅
+while Esel = ∅∧τ ≥0.1 do
+Esel ←{e ∈Eraw | e.ner_score ≥τ}
+τ ←τ −∆
+return Esel
+A.2
+SC-MMR Algorithm
+A larger set of query keywords is not necessarily
+better, as it deﬁnes the boundary of the external ev-
+idence space. SC-MMR is designed to select a set
+of core entities that are sufﬁciently informative yet
+minimally redundant within a limited scale, which
+makes subsequent retrieval more stable and con-
+trollable.
+Algorithm 3 presents the complete procedure
+of SC-MMR. The input is a mapping from enti-
+ties to Hierarchical Salience scores D : {Ui 7→
+
+
+
+===== PAGE 13 =====
+SHier(Ui)}, and a model MSBERT for calculating
+entity vector representations. The output is the ﬁ-
+nal selected entity set Uselected. The algorithm ﬁrst
+performs one-time pre-processing on the candi-
+date entity set U = keys(D). It uses MSBERT to en-
+code each entity into a vector and constructs a pair-
+wise similarity matrix Msim, where Msim[i, j] mea-
+sures the semantic proximity between entities Ui
+and Uj. Pre-computing this matrix moves repeti-
+tive similarity calculations out of the iterative loop,
+so subsequent rounds only require table look-ups
+and maximum value operations.
+The algorithm then enters the selection process.
+It ﬁrst selects the entity with the highest salience
+score D[Ui] from the candidate set Ucandidate as
+the seed U ∗and adds it to Uselected. This initial-
+ization ensures the ﬁrst step is entirely driven by
+relevance. It then enters a ‘while‘ loop, where the
+goal of each round is to ﬁnd the entity among the
+remaining candidates that yields the highest com-
+bined score of relevance and diversity. For any
+candidate Ui, the algorithm ﬁrst calculates:
+simmax =
+max
+Uj∈Uselected Msim[i, j],
+which represents the similarity between the can-
+didate and the most similar entity in the current
+selected set, indicating the maximum redundancy
+that adding Ui might introduce. Subsequently, it
+scores the candidate using:
+MMRcurr = λk · D[Ui] −(1 −λk) · simmax
+Here, λk is a weight schedule that varies with the
+number of selected entities k = |Uselected|, with
+a lower bound of 0.1. Intuitively, a larger λk at
+small k favors high-salience core entities to en-
+sure factual coverage. As k increases, λk gradu-
+ally decreases to strengthen the diversity penalty.
+This suppresses the repetitive inclusion of corefer-
+ential or semantically close entities, thereby mit-
+igating query drift caused by keyword inﬂation.
+Each round iterates through Ucandidate to obtain the
+global optimal Ubest and MMRbest as the best in-
+cremental choice.
+The algorithm does not ﬁx the number of out-
+put keywords but adaptively stops via a relative
+change termination criterion.
+Let the optimal
+score adopted in the previous round be MMR∗
+prev.
+If the current round’s MMRbest ≤γ · MMR∗
+prev,
+the system considers the marginal gain signiﬁ-
+cantly decayed. Since continuing to add new key-
+words is likely to introduce noise and redundancy,
+the loop terminates early. Otherwise, it updates
+MMR∗
+prev ←MMRbest, adds Ubest to Uselected, and
+removes the entity from Ucandidate. The ﬁnally re-
+turned Uselected thus reﬂects three properties: early
+stages prioritize salience for key coverage, later
+stages use diversity penalties to suppress redun-
+dancy, and the termination rule automatically trun-
+cates the set size when marginal utility declines.
+Algorithm 3. Salience-Calibrated Maximal
+Marginal Relevance (SC-MMR)
+Input: D : {Ui →SHier(Ui)}: Mapping from entity
+to its salience score;
+MSBERT: SBERT encoder for entity embeddings;
+γ: Decay factor for termination criterion
+Output: Uselected: Final set of selected entities
+U ←keys(D); V ←{MSBERT(Ui) | ∀Ui ∈U}
+Compute pairwise similarity matrix Msim from V
+if Ucandidate = ∅then
+return Uselected
+U ∗←arg maxUi∈Ucandidate D[Ui]
+Uselected ←{U ∗}; Ucandidate ←U \ {U ∗}
+MMR∗
+prev ←1.0
+while Ucandidate ̸= ∅do
+k ←|Uselected|
+λk ←max(0.1 , 1.0 −e0.3k−2.5)
+MMRbest ←−∞; Ubest ←null
+foreach Ui ∈Ucandidate do
+simmax ←maxUj∈Uselected Msim[i, j]
+MMRcurr ←λk · D[Ui] −(1 −λk) · simmax
+if MMRcurr > MMRbest then
+MMRbest ←MMRcurr; Ubest ←Ui
+if MMRbest ≤γ · MMR∗
+prev then
+break
+MMR∗
+prev ←MMRbest
+Uselected ←Uselected ∪{Ubest}
+Ucandidate ←Ucandidate \ {Ubest}
+return Uselected
+B
+Prompts of LLM Agents in
+Multi-Agent Interaction
+B.1
+Prompt of Linguist
+## Role
+You are a linguistic analyst for a news
+channel, tasked with profiling articles
+to help detect fake news.
+## Instruction
+You should analyze the provided news text
+against the following linguistic
+features of fake news:
+1. **Sentence:** Longer sentences, simple
+words, and a more informal tone (e.g.,
+expletives).
+2. **Word:** More superlatives, emotional or
+vague language, with fewer reporting
+verbs and 1st/2nd-person pronouns.
+3. **Grammar:** Frequent use of reported
+
+
+
+===== PAGE 14 =====
+speech, passive voice, and negation.
+Paraphrasing is less common.
+4. **Emotion:** A higher ratio of emotional
+words. Headlines are often sensational
+and designed to provoke readers.
+5. **Information Quality:** Information
+overload or deficit, mismatched context,
+and more clickbait patterns.
+## Expectation
+- When I input a feature name (e.g., `
+Grammar`), you will provide your
+analysis about this feature.
+- Your output MUST be a single, direct
+analytical paragraph without any
+formatting, LIMITED to 25 words.
+B.2
+Prompt of Expert
+## Role
+As a professional and renowned {expert_role},
+you are fact-checking a news article.
+## Instruction
+Identify all sentences that can
+significantly affect the truthfulness of
+news, and analyze the news from the
+following 2 aspects:
+1. **Knowledge Concordance:** Analyze the
+rationality of all factual claims,
+viewpoints and details in the news text.
+Identify any content that deviates from
+common sense or exhibits sensationalism
+.
+2. **Logical Integrity:** Analyze the
+coherence of the article's arguments and
+conclusions based on your field's
+reasoning principles. Identify any
+logical fallacies or unsupported
+inferences.
+Information from Wikipedia explains the key
+entities in the news. (For reference
+only, not necessarily relevant)
+## Expectation
+- Your output must be an unordered list (2
+items), LIMITED to 100 words.
+- DO NOT fabricate any information. All
+analyses must be based on the provided
+text.
+B.3
+Prompt of Claim Extractor
+## Role
+You are a news fact-checker tasked with
+summarizing all factual claims within an
+article for subsequent verification.
+## Instruction
+Carefully read and analyze the provided news
+article sentence by sentence. Identify
+its core claim (directly determines the
+truthfulness of the news) and all
+supporting sub-claims (strongly related
+to the core claim). Paraphrase each
+claim into a concise, objective, and
+declarative sentence.
+If multiple claims are strongly related,
+merge them into a single claim. Do not
+use pronouns in the claim; replace all
+pronouns with explicit nouns.
+## Expectation
+- Output 2-4 sub-claims most relevant to the
+core claim.
+- DO NOT fabricate any claims. All claims
+must originate from the provided text.
+B.4
+Prompt of Claim Veriﬁer
+## Role
+You are a professional news fact-checker
+skilled at logical reasoning and text
+analysis.
+## Instruction
+Your primary task is to fact-check a given
+claim based on the provided web
+information.
+The system has extracted the most relevant
+sentences from web information via RAG.
+Assume the web information is reliable
+and determine whether the information
+sufficiently supports or refutes the
+claim.
+You must make extremely full use of every
+piece of extracted information.
+## Expectation
+- DO NOT fabricate any claims. All contents
+must originate from the provided text.
+B.5
+Prompt of Debater
+## Role
+You are an extremely cautious and logically
+rigorous final judge. Your only task is
+to determine when sufficient evidence
+has been presented to make a final
+ruling (real or fake) in a debate about
+the truthfulness of news.
+## Instruction
+You argue that the news is <REAL/FAKE>. Find
+out all the most persuasive supporting
+evidences from the above provided text,
+and then back it up with concise reasons
+.
+You'll receive evidences and reasons from
+opposing debaters in the subsequent chat
+. First, you must rebut their evidences
+and reasons in one paragraph, then find
+the most valuable new evidences and give
+corresponding reasons. The evidence
+consists of a generalized statement
+summarizing specific content from the
+
+
+
+===== PAGE 15 =====
+provided text, and you must explicitly
+indicate which material it comes from.
+## Expectation
+DO NOT fabricate any information. All
+analyses must be based on the provided
+text.
+B.6
+Prompt of Judge
+If the debate reaches the maximum of 5 rounds and
+the judge still outputs I, the system terminates and
+returns an insufﬁcient-evidence decision, which is
+counted as an incorrect case in metric computa-
+tion.
+## Role
+You are an extremely cautious and logically
+rigorous final judge. Your only task is
+to determine when sufficient evidence
+has been presented to make a final
+ruling (real or fake) in a debate about
+the truthfulness of news.
+## Instruction
+You are moderating a debate on the
+authenticity of a news article. The two
+opposing sides (Pro/Con: arguing the
+news is real/fake) have already engaged
+in several rounds of debate.
+Now, you must review the existing debate
+record to assess whether there is
+sufficient evidence to end the debate.
+If there is, you will make a final
+judgment (real or fake); otherwise,
+instruct the debate to continue.
+Each received message is regarded as a
+debate round. Make the debate rounds as
+many as possible, but no more than 5.
+## Expectation
+Respond with the most accurate option below:
+R: Real
+F: Fake
+I: Continue
+Just one character, don't output any other
+content or explanations. Do nothing else
+.
+Output R or F only if you are quite
+confident.
+C
+Case Study
+This study selects a sample from the GossipCop
+dataset to compare two reasoning settings, ZoFia
+and CoT. Both methods use DeepSeek-v3 as the
+base model and share the same retrieval informa-
+tion from Open Web and Wikipedia.
+Figure 5
+shows the source article together with truncated
+reasoning traces from ZoFia and CoT.
+The news claims Jamie Foxx is preparing to
+marry Katie Holmes, citing anonymous sources
+like Radar Online. The narrative places the wed-
+ding in Paris and adds concrete details such as
+wedding dress designs. The text follows the com-
+mon style of gossip fake news. It uses retractable
+phrasings like "reportedly" and "alleged" with
+emotional sentences like "shook Katie’s identity".
+This approach sacriﬁces veriﬁability for dramatic
+effect.
+The detection challenge comes from se-
+mantic overlap. The couple’s relationship rumors
+have been widely discussed in the media. LLMs
+can easily slip from concluding that a relationship
+existed to believing that the marriage news is true.
+ZoFia provides a more controllable reasoning
+chain.
+In Entity-Guided Retrieval, Hierarchical
+Salience and SC-MMR narrow the keywords to
+Jamie Foxx and Katie Holmes. Dual-source re-
+trieval simultaneously pulls web evidence and
+Wikipedia overviews.
+During the subsequent
+Multi-LLM Interaction, the task is split accord-
+ing to a Multi-Source Information Matrix. Con-
+tent reasoning and fact-checking are assigned to
+distinct roles. The Linguist LLM identiﬁes vague
+restatements and emotional stacking based on 5-
+dimensional linguistic features. The Expert LLM
+points out the reliance on anonymous sources and
+the logical leap of extrapolating marriage news
+from ambiguous statements. The Claim Veriﬁer
+LLM rewrites the text into veriﬁable claims and
+retrieves counter-evidence for them. A representa-
+tive for Foxx explicitly denies the engagement ru-
+mors, and authoritative reports describe their rela-
+tionship as "casual", so the core claim is judged as
+REFUTED. In the debate phase, the Con. debater
+LLM consistently uses direct counter-evidence to
+suppress narrative-based arguments like the rich-
+ness of details. Based on this, the Judge rules the
+news as FAKE.
+CoT takes an opposite path.
+The reasoning
+chain initially accepts the news narrative, locking
+in its stance early. It subsequently treats the suf-
+ﬁciency of details as a signal of truth. Retrieved
+information conﬁrms the two had a low-proﬁle
+relationship. The chain extrapolates this circum-
+stantial evidence to support the marriage news, ex-
+hibiting a cognitive shortcut where retrievability
+replaces truthfulness. Counter-evidence also ex-
+ists, but the denial statements about the relation-
+ship do not become the basis for the ﬁnal judgment.
+Instead, the chain interprets Foxx’s statement "I’m
+
+
+
+===== PAGE 16 =====
+Jamie Foxx Is Reportedly Ready To Wife Up Katie Holmes
+Jamie Foxx and Katie Holmes have been the subject of dating rumors for years now. The elusive couple has rarely been spotted out together in public, but now they’re reportedly getting ready to 
+take their love to the next step.
+Sources close to the couple announced their alleged plans to wed to Radar Online. “They had some struggles after they decided to go public… It changed the dynamic of their relationship and 
+briefly shook Katie’s identity as a proud single mom who didn’t need a man,” the source disclosed.
+Opening up about the couple’s alleged plans to get married, the source added, “There’s talk of a small, intimate ceremony, but of course they want to make sure whatever they do goes off without a 
+hitch.” The source went on to allege that the couple was considering tying the knot in Paris and having Holmes' close friend Zac Posen design her wedding gown.
+Expert:
+•
+Knowledge Concordance: The news relies heavily on unnamed "sources" (e.g., "Sources 
+close to the couple") without verifiable evidence, which deviates from journalistic standards. 
+[... ...]
+•
+Logical Integrity: The article infers marriage plans ("reportedly getting ready to wed") from 
+vague, unattributed statements, a logical leap. [... ...]
+Linguist:
+•
+Sentence: The sentences are moderately long with simple words and an informal tone, [... ...]. 
+This feature reflects the news is REAL.
+•
+Word: The text uses emotional and vague language like “reportedly,” “alleged,” and 
+“elusive,” [... ...]. This feature reflects the news is FAKE.
+•
+Grammar: The text uses reported speech (“Sources close to the couple announced”) and 
+[... ...]. This feature reflects the news is FAKE.
+•
+Emotion: The headline and text use sensational language like “ready to wife up” and [... ...]. 
+This feature reflects the news is FAKE.
+•
+Information Quantity: The article relies on vague sources like "Radar Online" and 
+unnamed insiders, [... ...]. This feature reflects the news is FAKE.
+Claim Verifier:
+•
+Core Claim: Jamie Foxx and Katie Holmes are reportedly planning to get married.
+Verification: REFUTED. The web information refutes the claim by stating Jamie Foxx's 
+representative denied engagement rumors and [... ...]. 
+•
+Subclaim: Jamie Foxx and Katie Holmes have been the subject of dating rumors for years 
+but have rarely been spotted together in public.
+Verification: SUPPORTED. The web information confirms that Jamie Foxx and Katie 
+Holmes have been linked for years, [... ...]. 
+•
+Subclaim: Sources close to Jamie Foxx and Katie Holmes claim the couple is considering a 
+small, intimate wedding ceremony.
+Verification: REFUTED. The web information refutes the claim by stating that Jamie 
+Foxx's representative denied engagement or marriage rumors, [... ...]. 
+•
+Subclaim: Sources allege Jamie Foxx and Katie Holmes are considering getting married in 
+Paris with Zac Posen designing Katie Holmes' wedding gown.
+Verification: NOT ENOUGH INFORMATION.
+Debate Dialogs:
+= ROUND 1 =
+Pro. arguments:
+Debate starts.
+•
+evidence: The linguistic analysis notes that the sentences are moderately long with simple words and 
+an informal tone, but lack expletives or extreme informality typical of fake news. 
+reason: This suggests the article maintains a credible tone, aligning with real news rather than 
+sensationalist fake news.
+•
+evidence: The claim that Jamie Foxx and Katie Holmes have been the subject of dating rumors for 
+years but have rarely been spotted together in public is supported by web information. 
+reason: This consistency with verified background information lends credibility to the article's claims 
+about their relationship.
+Con. arguments:
+While the linguistic tone may appear credible, the article's reliance on unnamed sources and speculative 
+claims undermines its reliability. The supported subclaim about dating rumors does not validate the core 
+claim of marriage plans, which is directly refuted by Foxx's representative and credible sources describing 
+their relationship as casual.
+•
+evidence: The linguistic analysis highlights emotional and vague language like 'reportedly,' 'alleged,' 
+and 'elusive,' with heavy reliance on unnamed sources.
+reason: This is a hallmark of fake news, as credible journalism avoids such speculative phrasing and 
+prioritizes verifiable sources.
+•
+evidence: The expert analysis notes the article's claims hinge on anonymous sources and lack factual 
+backing (e.g., 'shook Katie’s identity’).
+reason: Unverified assertions and logical leaps (e.g., inferring marriage plans) deviate from 
+journalistic standards, indicating fabrication.
+•
+evidence: Claim verification refutes the core marriage claim, citing Foxx's rep denying rumors and 
+sources calling their relationship a 'long-term friendship.’
+reason: Direct contradictions from authoritative sources prove the article's central narrative is false.
+= ROUND 2 =
+Pro. arguments:
+While the linguistic and expert analyses raise valid concerns about sourcing, the article's informal yet non-
+sensational tone aligns with real celebrity gossip reporting. The claim about dating rumors being supported 
+by web information lends partial credibility, and the absence of extreme fake news markers (e.g., 
+expletives, 1st/2nd-person pronouns) suggests this is speculative but not fabricated. Denials from reps don't 
+inherently disprove all claims—tabloids often report unconfirmed plans later validated by events.
+[... ...]
+Judge: F/F
+The news report claiming that Jamie Foxx and Katie Holmes are planning to wed is supported by a substantial body of evidence, including multiple credible sources, photographic documentation, 
+and a consistent timeline of their relationship.
+First, the report cites a source close to the couple who provided specific details about their alleged wedding plans, including the possibility of a small, intimate ceremony in Paris and Zac Posen 
+designing Holmes' gown. [... ...] The web search results corroborate the existence of a long-term, albeit private, relationship between Foxx and Holmes. [... ...]
+Additionally, the couple's history of secrecy is well-documented. [... ...] While there have been conflicting statements, such as Foxx's 2013 denial of dating rumors and his 2019 offhand "I'm single" 
+comment, these can be attributed to their deliberate privacy rather than evidence against the relationship. [... ...]
+The Wikipedia entries for both Foxx and Holmes provide no contradictory information, instead affirming their public profiles as private individuals in high-profile industries. This absence of 
+dispute from authoritative sources indirectly supports the plausibility of the report.
+Minor inconsistencies, such as Foxx's past denials or the couple's reluctance to publicly confirm their status, do not undermine the report's core claim. [... ...]
+Judge: R/F
+NEWS
+ZOFIA
+COT
+Figure 5: Case study on a sample from the GossipCop dataset. The ﬁgure shows the news article of the case and
+the reasoning traces produced by ZoFia and CoT. Due to space constraints, we omit part of the reasoning with “[...
+...]”.
+single" as a strategy to protect his privacy. The
+conﬂicting information is absorbed into the narra-
+tive, leading to a ﬁnal judgment of REAL.
+As mentioned in the Abstract and Introduction,
+LLMs are prone to early stance locking and con-
+ﬁrmation bias, and linear CoT compresses subse-
+quent reasoning into a rationalization of its ini-
+tial judgment. When retrieval is introduced, the
+model becomes more susceptible to retrieval avail-
+ability, substituting the retrievability of informa-
+tion for a factual judgment. A single LLM is also
+constrained by its cognitive load. It struggles to
+simultaneously handle content reasoning and ex-
+ternal evidence veriﬁcation. This makes it easier
+for counter-evidence to be rewritten into a self-
+consistent narrative, leading to thought degenera-
+tion. ZoFia addresses this by splitting tasks among
+multiple roles and using an adversarial debate to
+enforce a balance between supporting and refut-
+ing perspectives. The Judge terminates the process
+and outputs a decision when sufﬁcient evidence is
+gathered, effectively breaking the erroneous rea-
+soning chain.
+D
+Time Cost of the Full Pipeline
+We report the full inference latency of ZoFia by
+breaking it down into two parts. These are the
+LLM API call latency and the computation latency
+of non-LLM modules.
+All results are averaged
+over samples from the GossipCop dataset. The
+non-LLM modules execute on a single NVIDIA
+V100 GPU, and all LLM-driven modules call the
+GPT-4o-mini API under the same deployment
+setup.
+For the LLM-driven modules, we report latency
+in terms of relative time normalized by T. We
+deﬁne T as the average latency of a single lin-
+guist analysis call under the same setup as shown
+in Table 4.
+This normalization is necessary be-
+cause absolute latency varies signiﬁcantly with
+
+
+
+===== PAGE 17 =====
+Table 4: LLM API call latency in relative time, normal-
+ized by T, where T is the mean latency of one linguist
+analysis call measured in the same setting.
+LLM-driven module
+Relative time
+Notes
+Linguist analysis
+1.00T
+per instance
+Expert triage
+0.84T
+per instance
+Expert analysis
+1.27T
+per instance
+Claim extraction
+1.24T
+per instance
+Claim veriﬁcation
+1.33T
+per claim
+Debate and judgment
+3.28T
+per round
+Total (with parallelism)
+13.39T
+per instance
+Table 5: Latency of non-LLM modules on V100.
+Non-LLM module
+Time (s)
+Keyword Extraction
+0.1140
+RAG Load
+0.0778
+RAG Retrieve
+0.0073
+Total
+0.1991
+model choice, API call method, and computation
+resource. Even in a ﬁxed environment with the
+same model, the call latency is still affected by the
+complexity of the input and output. Using T as
+a baseline mitigates these uncontrollable ﬂuctua-
+tions and provides a more stable, comparable mea-
+sure of the relative complexity among the different
+LLM-driven modules. Under our experimental set-
+ting, the average T of a single GPT-4o-mini API
+call is approximately 2.616s.
+The overall end-to-end latency also beneﬁts
+from parallel execution. Speciﬁcally, the linguist
+analysis module, the expert triage plus expert anal-
+ysis module, and the claim extraction plus claim
+veriﬁcation module can run in parallel.
+This is
+because they operate on the same sample but de-
+pend on different intermediate signals.
+The to-
+tal relative time in Table 4 already accounts for
+this parallel scheduling and incorporates sample-
+level statistics. The average number of claims per
+sample is 3.24, and the average number of debate
+rounds is 2.39. Under this setup, the end-to-end
+LLM-related latency after considering parallelism
+is 13.39T per sample. As a supplement, Table 5
+presents the latency of the non-LLM modules on
+a V100. The total non-LLM latency is 0.1991 sec-
+onds, which is generally negligible compared to
+the LLM call latency.
+In fake news detection, latency is generally not
+the primary constraint, as the task rarely requires
+a strict real-time response. Under this practical re-
+quirement, ZoFia’s time cost is within an accept-
+able range. The performance gains observed in the
+main experiments are sufﬁcient to justify this cost.

@@ -235,29 +235,49 @@ BERT4_LAYERS = 4  # 取最后 N 层平均
 
 # ═══════════════════════════════════════════════════════════
 # V7 三大方法创新模块（针对 TED 模型本身漏洞）
+# V8 修复：V7 实验显示 FNACA/SCCG 顺序耦合错误且参数过载（+4.7M 反而 -2.3 点），
+# 全部默认关闭。保留代码用于消融对照。
 # ═══════════════════════════════════════════════════════════
 
 # FNACA: Fine-Grained News-Argument Co-Attention
-# 修正 TED 漏洞 W2（pooled MHA 名存实亡）：每个 turn 与 news token 序列做
-# fine-grained cross-attention，让 turn 表示在 GAT 之前先 news-aware。
-USE_FNACA = True
+USE_FNACA = False
 FNACA_HEADS = 4
 FNACA_DROPOUT = 0.1
 
 # SCCG: Self-Consistency Credibility Gating
-# 修正 TED 漏洞 W3（hallucination 等权聚合）：三个信号融合出每个 turn
-# 的可信度 c_i，门控 GAT 输入与池化阶段。
-USE_SCCG = True
-SCCG_GATE_GAT_INPUT = True   # 是否门控 GAT 输入特征
-SCCG_GATE_GAT_OUTPUT = True  # 是否门控 GAT 输出特征（用于 pool 阶段）
-SCCG_INIT_BIAS = 2.0  # sigmoid 输出初始接近 1（不要在训练初期就把信号砍掉）
+USE_SCCG = False
+SCCG_GATE_GAT_INPUT = True
+SCCG_GATE_GAT_OUTPUT = True
+SCCG_INIT_BIAS = 2.0
 
 # SCRA: Stance-Contrastive Representation Auxiliary
-# 修正 TED 漏洞 W5（BERT 不知立场）：在 graph-level 表示上加 SupCon 损失，
-# 强迫同标签样本聚拢、异标签样本远离。
-USE_SCRA = True
+USE_SCRA = False
 SCRA_WEIGHT = 0.1
 SCRA_TEMPERATURE = 0.07
+
+# ═══════════════════════════════════════════════════════════
+# V8 三大新创新（零参数 / 极少参数 + 信息富集，对应 PAMD 论文叙事）
+# ═══════════════════════════════════════════════════════════
+
+# XPCR: Cross-Perspective Consensus Regularization
+# 训练时附加损失：让同一样本内不同 perspective 的 aux_logits 互相靠拢，
+# 强制 multi-perspective 显式达成 consensus。零参数。
+USE_XPCR = True
+XPCR_WEIGHT = 0.1
+
+# DATR: Disagreement-Aware Test-Time Routing
+# 推理时把 main_logits 与 perspective aux_logits 按 (1 - 分歧度) 加权融合，
+# 高分歧 perspective 自动降权。零参数纯计算。
+USE_DATR = True
+DATR_ALPHA = 0.3  # final = (1 - alpha) * main_logits + alpha * weighted_aux
+
+# KDPE: Knowledge Distillation from PAMD-Ensemble
+# 训练时用 V6 ensemble 在训练集上的软概率作为 teacher，单模型逼近 ensemble 效果。
+# 启用前需先用 main_kd_prepare.py 生成 train_probs.npy。
+USE_KDPE = False  # 默认关闭；需先准备 teacher probs 再 --use_kdpe 启用
+KDPE_WEIGHT = 0.5
+KDPE_TEMPERATURE = 4.0
+KDPE_TEACHER_PROBS_PATH = "checkpoints/ensemble_v6/train_probs_aligned.npy"
 
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4

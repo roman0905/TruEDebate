@@ -1,0 +1,1787 @@
+
+
+===== PAGE 1 =====
+Navigating Truth in Multimodal Fact-checking via Retrieval- and
+Reasoning-Enhanced Large Language Models
+Fanrui Zhang∗
+University of Science and Technology
+of China
+Hefei, Anhui, China
+Shanghai Innovation Institute
+Shanghai, China
+zfr888@mail.ustc.edu.cn
+Qiang Zhang∗
+University of Science and Technology
+of China
+Hefei, Anhui, China
+zq_126@mail.ustc.edu.cn
+Jianwen Sun∗
+Nankai University
+Tianjin, Tianjin, China
+Shanghai Innovation Institute
+Shanghai, China
+sunjianwen@mail.nankai.edu.cn
+Chuanhao Li
+Shanghai AI Laboratory
+Shanghai, Shanghai, China
+lichuanhao@pjlab.org.cn
+Jiaxin Ai
+Wuhan University
+Wuhan, Hubei, China
+julyai@whu.edu.cn
+Yukang Feng
+Zizhen Li
+Nankai University
+Tianjin, Tianjin, China
+yukangfeng@mail.nankai.edu.cn
+lizizhen@mail.nankai.edu.cn
+Kaipeng Zhang†
+Shanghai Innovation Institute
+Shanghai, China
+kp_zhang@foxmail.com
+Jiawei Liu†
+University of Science and Technology
+of China
+Hefei, Anhui, China
+jwliu6@ustc.edu.cn
+Zheng-Jun Zha
+University of Science and Technology
+of China
+Hefei, Anhui, China
+zhazj@ustc.edu.cn
+Abstract
+Recent studies show that claims incorporating both text and images
+spread more effectively than those with text alone, presenting signif-
+icant challenges for multimodal fact-checking. The rapid develop-
+ment of Multi-modal Large Language Models (MLLMs) has greatly
+advanced research in this field, enabling stronger performance.
+However, existing MLLM-based fact-checking methods fail to fully
+exploit visual evidence, and their reliance on rigid fine-tuning tem-
+plates limits context-aware explanations and leads to weak deep rea-
+soning. To address these limitations, we propose FACTCOMPASS, a
+novel framework that combines reasoning-aware fine-tuning with
+large-scale rule-based reinforcement learning and incorporates a
+semantic- and knowledge-enhanced retrieval module to strengthen
+deep reasoning and improve evidence utilization. This framework
+enhances evidence retrieval by obtaining semantically relevant
+evidence images, enriching the contextual understanding of claim-
+related images, and refining textual evidence at the knowledge level.
+To further enhance reasoning, we introduce a self-refining reinforce-
+ment fine-tuning strategy: (1) distilling GPT-4o’s reasoning from
+partially fact-checking data for cold-start Chain-of-Thought learn-
+ing; (2) activating reasoning across broader datasets using prior
+∗Equal contribution
+†Corresponding author
+This work is licensed under a Creative Commons Attribution 4.0 International License.
+WWW ’26, Dubai, United Arab Emirates.
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2307-0/2026/04
+https://doi.org/10.1145/3774904.3792706
+knowledge and rejection sampling; (3) applying Group Relative Pol-
+icy Optimization to explore diverse reasoning paths and optimize
+factual consistency. Extensive experiments have demonstrated the
+effectiveness of the proposed framework.
+CCS Concepts
+• Information systems →Social networks; Multimedia infor-
+mation systems.
+Keywords
+Multimodal fact-checking, Deep Reasoning, Retrieval-augmented
+generation
+ACM Reference Format:
+Fanrui Zhang, Qiang Zhang, Jianwen Sun, Chuanhao Li, Jiaxin Ai, Yukang
+Feng, Zizhen Li, Kaipeng Zhang, Jiawei Liu, and Zheng-Jun Zha. 2026.
+Navigating Truth in Multimodal Fact-checking via Retrieval- and Reasoning-
+Enhanced Large Language Models. In Proceedings of the ACM Web Conference
+2026 (WWW ’26), April 13–17, 2026, Dubai, United Arab Emirates. ACM, New
+York, NY, USA, 11 pages. https://doi.org/10.1145/3774904.3792706
+1
+Introduction
+The unregulated spread of false information can distort public opin-
+ion, manipulate markets, and even endanger public health. Fact-
+checking, which assesses the veracity of written and spoken claims
+by referencing supporting evidence [14, 38, 47, 50], is an effective
+means of identifying falsehoods and has become a key tool for
+ensuring information credibility. As social media and generative AI
+accelerate the dissemination of information at an unprecedented
+pace, manual fact-checking has become insufficient to meet the
+1841
+
+
+
+===== PAGE 2 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+Fanrui Zhang et al.
+Claim 
+Image
+Evidence
+Text
+Multi-modal
+Encoder
+Classifier
+Image
+Encoder
+(a) The paradigm of classical Fact-checking model (b) The paradigm of Fact-checking model with LLM
+(c) The proposed FACTCOMPASS
+Evidence
+Image
+Claim 
+Text
+Large 
+Language 
+Model
+MLLM
+Image
+Encoder
+Claim 
+Image
+Evidence
+Text
+Claim 
+Text
+Evidence
+Image
+Claim 
+Text
+Evidence
+Text
+Claim 
+Image
+Image
+Entity
+Large 
+Language 
+Model
+Classification 
+Output
+Multi-level 
+Retrieval 
+Module
+SearchAgent
+RefineAgent
+Selected 
+Evidence Image
+Reasoning 
+Output
+SFT
+Cold Start
+Rejection 
+Sampling
+GRPO
+Figure 1: FACTCOMPASS enhances both textual and visual
+evidence retrieval and adopts a more sophisticated training
+strategy to stimulate reasoning capabilities.
+challenge. Therefore, to address the demands of scale, automated
+fact-checking is becoming indispensable.
+Information is conveyed through multimodal media, primarily
+text and images. Existing text-based fact-checking methods have
+achieved significant progress. However, with the rise of multime-
+dia technologies, an increasing number of rumor spreaders are
+leveraging combinations of text and images to attract attention and
+spread multimodal false information [35, 44]. Common types of
+multimodal misinformation can be categorized into two groups:
+one involves fabricated text or images [23, 34], and the other [1, 39]
+involves authentic images presented in new but misleading or incor-
+rect contexts—a phenomenon often referred to as “out-of-context”.
+Unlike unimodal text-based fact-checking, text and images are
+inherently heterogeneous, making it challenging to detect false
+information from such entangled multimodal content.
+Early methods [6, 12, 49] fuse multimodal features from claims
+and evidence using multimodal encoders, followed by a fact-checking
+classifier to make predictions (as illustrated in Figure 1(a)). These
+approaches typically adopt concatenation operations or attention
+mechanisms to capture the underlying semantic relationships be-
+tween the claims. However, they often struggle to fully comprehend
+the semantics of news content. In addition, due to inherent model
+limitations, such methods generally fail to generate convincing and
+interpretable fact-checking outcomes. In recent years, multimodal
+large language models (MLLMs) have made significant strides in
+integrating visual and textual information. Building upon this, sev-
+eral studies [29] have fine-tuned large language models specifically
+for fact-checking tasks (as shown in Figure 1(b)), where multimodal
+claims and evidence are organized into supervised fine-tuning (SFT)
+datasets to train open-source MLLMs. Nevertheless, these methods
+still face several key challenges: (1) they fail to fully utilize im-
+age evidence, overlooking the learning and fine-grained alignment
+of visual cues; (2) they rely on rigid processing pipelines that are
+error-prone and lack robust deep reasoning capabilities, ultimately
+constraining the model’s ability to understand complex and realistic
+news contexts.
+To address the limitations of existing methods in image utiliza-
+tion and reasoning capabilities, we propose FACTCOMPASS, a
+novel framework that combines multi-level retrieval modules with
+a self-optimizing reinforcement fine-tuning strategy to advance
+the development of multimodal fact-checking. The framework is
+specifically designed to overcome two core challenges in current ap-
+proaches: (1) To address the insufficient use of image evidence and
+the lack of fine-grained visual alignment, FACTCOMPASS intro-
+duces a Semantic-enhanced Retrieval Module, which constructs a
+dedicated claim-evidence image pair dataset and adopts a Fact NCE
+loss function to learn a unified feature space between claims and
+evidence images. This enables accurate matching of semantically
+relevant image evidence, thereby enhancing the model’s ability
+to understand and reason over visual information. Additionally,
+a Knowledge-enhanced Retrieval Module is well-designed to in-
+corporate knowledge graphs and structured knowledge bases (e.g.,
+Wikidata) via SearchAgent and RefineAgent, supplementing and op-
+timizing textual evidence to enhance contextual understanding and
+retrieval efficiency. (2) To tackle rigid processing pipelines and weak
+reasoning capabilities, FACTCOMPASS proposes a reinforcement
+learning method named Group Relative Policy Optimization (GRPO)
+to replace traditional template-based reasoning. This approach en-
+courages the model to explore diverse and deeper reasoning paths
+through trial-and-error.
+The overall multimodal fact-checking process of FACTCOM-
+PASS is illustrated in Figure 1(c), consisting of three major com-
+ponents: (1) Semantic-enhanced Retrieval Module: Enhances se-
+mantic matching of image evidence through multi-source image
+retrieval and alignment in a unified feature space. (2) Knowledge-
+enhanced Retrieval Module: Expands the context of textual evidence
+using named entity recognition and knowledge graph linking. The
+SearchAgent retrieves relevant knowledge, while the RefineAgent
+refines the results to improve information quality. (3) Large Lan-
+guage Model Training Pipeline: Composed of three stages: 1) Cold-
+Start: Establishes a reasoning foundation by leveraging GPT-4o to
+generate initial reasoning data. 2) Rejection Sampling: Generates
+and filters long-chain reasoning trajectories to reinforce accurate
+patterns. 3) GRPO: Uses reinforcement learning to optimize rea-
+soning strategies, promoting active reasoning evolution beyond
+traditional supervised fine-tuning. Through the synergy of these
+modules, FACTCOMPASS forms a closed-loop system in image
+understanding, textual refinement, and reasoning evolution, effec-
+tively improving the accuracy, flexibility, and interpretability of
+multimodal fact-checking.
+Our contributions are summarized as follows. (1) We propose
+FACTCOMPASS, a novel multimodal fact-checking framework that
+integrates multi-level retrieval modules and a self-refining reinforce-
+ment fine-tuning strategy to jointly improve image evidence utiliza-
+tion and reasoning capabilities. (2) We design a semantic-enhanced
+retrieval module with a dedicated claim-image dataset and a Fact
+NCE loss to learn a unified feature space, enabling fine-grained
+alignment between claims and image evidence. (3) We introduce
+group relative policy optimization, a reinforcement learning-based
+1842
+
+
+
+===== PAGE 3 =====
+Navigating Truth in Multimodal Fact-checking via Retrieval- and Reasoning-Enhanced Large Language Models
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+reasoning method that replaces rigid template-based pipelines by
+encouraging diverse and deeper reasoning through trial-and-error.
+2
+Related Work
+2.1
+Multi-modal Fact-checking.
+Prior research on multimodal fact-checking has primarily focused
+on textual analysis, with limited utilization of visual information.
+Early approaches, such as Jaiswal et al. [17], matched random image-
+title pairs, while Sabir et al. [31] advanced this by swapping named
+entities to generate more challenging mismatches. Khattar et al. [18]
+introduced the Multimodal Variational Autoencoder (MVAE), which
+combines a bimodal autoencoder with a classifier to learn shared
+text-visual representations. However, many fabricated examples in
+early datasets were overly simplistic or linguistically biased, mak-
+ing them easily detectable by basic models [22]. To address these
+limitations, Luo et al. [22] developed the NewsCLIPpings dataset,
+while datasets such as Factify [28] further enriched multimodal
+misinformation detection with more diverse and realistic samples.
+Recent advancements have emphasized cross-modal consistency
+and reasoning. Sahar et al. [1] introduced a consistency-checking
+network (CCN) to align visual and textual modalities. Dhankar et
+al. [10] applied cosine similarity between text and visual embed-
+dings, while Du et al. [11] fused DeBERTa and Swinv2 embeddings
+using co-attention. More recent contributions include Hu et al. [15],
+who constructed the 𝑀𝑅2 dataset for multimodal reasoning, and
+the creation of MOCHEG [45], a large-scale fact-checking dataset
+containing 21,184 annotated claims for training robust multimodal
+models. AVeriTeC [32] further advances this direction by providing
+real-world multimodal evidence retrieved from the web for claim
+verification. DEFAME [5] adopts a six-stage inference-time RAG
+pipeline with a frozen MLLM, demonstrating strong generalization
+and factual reasoning capabilities.
+2.2
+Multi-modal Large language Models.
+Recent Multi-modal Large language Models have made remarkable
+progress in visual perception and cross-modal understanding. BLIP-
+2 [19] pioneered image-text feature fusion via LLM integration,
+while LLaVA [21] and Mini-GPT [51] further advanced contextual
+alignment through instruction tuning. Models such as QwenVL
+[3], InternVL [7], and YiVL [46] enhanced multimodal reasoning
+through large-scale pre-training and adaptive fusion mechanisms.
+Meanwhile, Gemini [37] and SNIFFER [29] demonstrated strong
+capabilities in misinformation detection and fact verification tasks.
+With the emergence of advanced LLMs like OpenAI o1 [16] and
+DeepSeek R1 [13], MLLMs are increasingly capable of handling
+complex visual reasoning, leveraging methods such as visual chain-
+of-thought reasoning [33, 40] and retrieval-augmented reasoning
+[42] to improve interpretability and factual consistency.
+3
+Methodology
+3.1
+Architecture Overview
+The architecture of FACTCOMPASS, shown in Figure 2 and Figure 3,
+comprises three core and interrelated components: the Semantic-
+enhanced Retrieval Module, the Knowledge-enhanced Retrieval
+Module, and the LLM module. To further enhance reasoning ca-
+pability and overall robustness, we introduce a three-stage self-
+refining reinforcement fine-tuning approach to effectively train the
+LLM module.
+3.2
+Semantic-enhanced Retrieval Module
+Since the original CLIP architecture was pre-trained on natural
+image datasets, it lacks support for semantic alignment within
+the news domain and for dual image-to-image and image-to-text
+matching. Our goal is to develop a specialized claim-evidence image
+retrieval module that selects evidence images (along with their
+corresponding captions) most semantically aligned with the claim
+image. This approach enables precise matching and improves the
+model’s ability to understand news facts for fact-checking. During
+training, we retain the original news captions for each evidence
+image in the retrieval set, sourced from online documents, to ensure
+semantic and contextual consistency.
+Module Detail. Given CLIP’s outstanding performance in zero-
+shot perception, which enables effective matching and distinction
+of general-domain natural images, we built our retrieval module
+based on the CLIP model, as illustrated in Figure 2. In this setup,
+CLIP’s image and text encoders are frozen to preserve their pre-
+trained knowledge. Building on this foundation, we introduce two
+MLP layers adapter structures after the encoders to fully leverage
+CLIP’s potential in the domain of image matching for news content.
+For multimodal claims, we obtain the encoded claim text features 𝑡c
+𝑖
+and image features 𝑣c
+𝑖. For evidence image and the corresponding
+captions, we also obtain the encoded textual features 𝑡e
+𝑖and image
+features 𝑣e
+𝑖.
+Claim-Evidence Image Pair Generation. To train the retrieval
+module for fact-checking, we extract a large set of images and their
+corresponding captions from unmodified visual news documents.
+First, we classify the images based on their source domain, grouping
+claim-evidence image-caption pairs from the same document. Next,
+we compute claim-evidence text similarity scores and select the
+image most similar to the claim text as the matching evidence image.
+After manual validation and filtering, we curate a final set of 20,000
+claim-evidence image pairs.
+Training and Inference. To train our retrieval module, similar to
+previous works [30, 43], we introduce a dual Fact NCE contrastive
+loss. We use two types of positive sample pairs during training: 1)
+Claim image-text pairs, denoted as (𝑣c
+𝑖,𝑡c
+𝑖), and Evidence image-text
+pairs, (𝑣e
+𝑖,𝑡e
+𝑖). 2) Cross-image-text pairs for aligning news semantics,
+namely, (𝑣c
+𝑖,𝑡e
+𝑖) and (𝑣e
+𝑖,𝑡c
+𝑖), since 𝑡c
+𝑖and 𝑡e
+𝑖represent similar events
+in the news domain. Assuming each mini-batch contains 𝑁samples,
+the image-to-text NCE loss is computed as:
+Li2t = −
+𝑁
+∑︁
+𝑖=1
+log
+Í
+(𝑣𝑖,𝑢)∈M𝑖exp (⟨𝑣𝑖,𝑢⟩/𝜏)
+Í𝑁
+𝑗=1 exp  ⟨𝑣𝑖,𝑡𝑗⟩/𝜏
+(1)
+where the set of positive pairs M𝑖is defined as
+M𝑖= {(𝑣c
+𝑖,𝑡c
+𝑖), (𝑣e
+𝑖,𝑡e
+𝑖)} ∪{(𝑣c
+𝑖,𝑡e
+𝑖), (𝑣e
+𝑖,𝑡c
+𝑖)}
+𝜏represents the temperature coefficient. Similarly, the text-to-image
+NCE loss is formulated as:
+Lt2i = −
+𝑁
+∑︁
+𝑖=1
+log
+Í
+(𝑡𝑖,𝑧)∈Q𝑖exp (⟨𝑡𝑖,𝑧⟩/𝜏)
+Í𝑁
+𝑗=1 exp  ⟨𝑡𝑖, 𝑣𝑗⟩/𝜏
+(2)
+1843
+
+
+
+===== PAGE 4 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+Fanrui Zhang et al.
+Share Projection
+Large Language Model
+...
+...
+...
+...
+FACTCOMPASS
+Semantic-enhanced Retrieval Module
+Learnable
+Frozen
+Claim Image Token
+Evidence Image Token
+Text Token
+Answer:<think>The main news image depicts children behind a 
+fence, with a flag resembling the Syrian opposition flag visible in 
+the background. This scene does not match the description of …The 
+evidence images show …</think><answer>Yes.</answer>
+Knowledge-enhanced Retrieval Module
+Image Encoder
+Claim Image
+Evidence Image
+𝑻𝟏
+𝑫
+People across Syntagma Square in Front of 
+the Greek Parliament in Athens on Thursday
+Claim Text with the Image
+Retrieved Evidence
+𝑻𝟐
+𝑫...
+...
+Evidence 
+Image
+Evidence 
+Text
+Knowledge-enhanced 
+Retrieval Module
+Semantic-enhanced 
+Retrieval Module
+Multi-level Retrieval Module
+Question: The news title is…Analyze the news 
+image <image>.The evidence images are 
+<image>... Use the text-based evidence below 
+to reason…Is this image-text claim manipulated?
+People across Syntagma Square 
+in Front of the Greek Parliament 
+in Athens on Thursday
+Greek anti-austerity protest in 
+Athens' Syntagma square, in front of 
+Greece's Parliament, in October 2012.
+CLIP
+Image 
+Encoder
+CLIP
+Text 
+Encoder
+Claim Text 
+Evidence Image caption
+Claim Image 
+Evidence Image 
+Adapter
+Claim Image Feature 
+Evidence Image Feature 
+Claim Text Feature 
+Evidence Text Feature 
+Fact NCE Loss
+Sentence1
+…
+SearchAgent
+Recreation, Leisure, 
+Syrian…
+Claim Image
+Claim Image Entity
+Fusion
+Entity
+Entity 
+Extraction
+Rewrite
+Combine
+Entity1
+Entity2
+...
+Knowledge Gragh 
+Information
+Knowledge Base 
+Information
+WIKIPEDIA
+𝑻𝟏
+𝑫
+...
+Decompose
+Filter
+Recompose
+Adapter
+Sentence2
+SentenceN
+Sentence1
+𝑻𝟐
+𝑫
+𝑻𝟑
+𝑫
+…
+SentenceN
+RefineAgent
+𝑻𝟏
+𝑫
+𝑻𝟐
+𝑫
+𝑻𝟑
+𝑫
+...
+Evidence Text
+Final Evidence Text
+Figure 2: The overall architecture of the proposed FACTCOMPASS.
+The total Fact NCE loss is the sum of the image-to-text and text-to-
+image losses. By modifying the CLIP architecture and training with
+dual Fact NCE losses, we enhance CLIP’s ability to match images
+and text in the news domain, while also aligning the feature space
+of image pairs that describe the same news event. During inference,
+for a given claim image and a set of candidate evidence images with
+corresponding captions, we encode the representations of claim
+image 𝑣c and the evidence image 𝑣e and the corresponding caption
+𝑡e. Subsequently, to select the most relevant sample for the claim
+image, we measure the similarity between the claim image and
+each evidence image, considering both the claim-evidence image
+similarity and the claim-evidence text similarity. This selection can
+be expressed as:
+arg max
+𝑖,𝑗
+
+𝑒⟨𝑣𝑖,𝑡𝑗⟩/𝜏
+Í
+𝑘𝑒⟨𝑣𝑖,𝑡𝑘⟩/𝜏+
+𝑒⟨𝑡𝑖,𝑣𝑗⟩/𝜏
+Í
+𝑘𝑒⟨𝑡𝑖,𝑣𝑘⟩/𝜏
+
+(3)
+Based on the ranking of the sum of the two similarity scores, we
+select the top few evidence images that best align with the claim
+image semantics.
+3.3
+Knowledge-enhanced Retrieval Module
+To enhance textual evidence, FACTCOMPASS introduces a Knowledge-
+enhanced Retrieval Module, which consists of the SearchAgent for
+external knowledge retrieval and the RefineAgent for knowledge
+refinement within documents.
+SearchAgent. Claim images often encode rich background knowl-
+edge that supports fact-checking by providing context and improv-
+ing interpretability. We first extract visual entities 𝐸𝑖—such as peo-
+ple and locations—using the Google Entity Detection API and YOLO.
+These entities are then enriched through two stages: first, they are
+linked to the DBpedia knowledge graph to retrieve higher-order se-
+mantic information, including one-hop neighboring entities, which
+are converted into token sequences using a pre-trained model;
+second, we query Wikidata knowledge base to retrieve concise,
+entity-specific descriptions, which are contextualized into complete
+background sentences to support claim understanding in the news
+domain.
+RefineAgent. The RefineAgent processes complex textual evidence
+{𝑇𝐷
+𝑖} retrieved from the internet, minimizing information loss and
+redundancy. Retrieved documents are divided into fragments, where
+short ones (1-2 sentences) are treated as a single unit, and longer
+ones are split into smaller units. Each fragment is converted into
+a feature vector, and relevance scores are computed to filter out
+redundant information. The relevant fragments are defined as the
+set ˆ𝑇𝐷, and the remaining fragments are merged sequentially to
+form the final evidence text.
+ˆ𝑇𝐷=
+Ø
+𝑆𝑖∈{𝑆𝑗|max𝑗≠𝑖Cos(v(𝑆𝑖),v(𝑆𝑗))≤𝜃}
+𝑆𝑖
+(4)
+where 𝑆𝑖denotes the 𝑖-th knowledge fragment, v(𝑆𝑖) is its vec-
+tor representation obtained using BERT [8], and Cos(v(𝑆𝑖), v(𝑆𝑗))
+calculates the cosine similarity between fragments 𝑆𝑖and 𝑆𝑗. The
+threshold 𝜃filters out redundant information.
+3.4
+LLM Training
+As shown in Figure 3, our pipeline includes three key stages:
+Cold Start. Existing MLLMs struggle with misinformation reason-
+ing due to limited exposure to reward modeling during pretraining.
+1844
+
+
+
+===== PAGE 5 =====
+Navigating Truth in Multimodal Fact-checking via Retrieval- and Reasoning-Enhanced Large Language Models
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+<think>
+The main news image depicts… 
+The news title…The evidence 
+images include… The text 
+evidence discusses… Based on 
+the visual analysis…</think> 
+<answer>Yes.</answer> 
+Reasoning
+GPT-4o
+FACTCOMPASS
+Filtering & 
+Fine-tuning
+FACTCOMPASS
+CoT
+Reasoning
+Claim
+Evidence 
+New Training Data
+Claim
+Evidence 
+Few Training Data
+Format 
+Reward
+Accuracy 
+Reward
+Reinforcement
+Finetuning
+Incorrect 
+Predicted Samples
+Correct
+Predicted Samples
+<think>…<think> 
+<answer>…<answer> 
+Ground Truth
+Incorrect 
+Predicted Samples
+Completions
+Policy Optimization
+FACTCOM
+PASS
+Correct
+Predicted Samples
+Stage 1. Cold Start Training
+Stage 3. Group-based Relative Policy Optimization
+Stage 2. Rejection Sampling
+Rejection 
+Sampling
+Multiple Sampling
+Fine-tuning
+Path Selection
+Correctness 
+Filtering
+Diversity Selection
+𝐴𝑛
+𝐴2
+𝐴1
+...
+0.8
+0.6
+0.3
+FACTCOM
+PASS
+Figure 3: The three-stage self-refining reinforcement fine-tuning strategy.
+To address this issue, we introduce a cold-start training phase,
+where a small amount of high-quality Chain-of-Thought (CoT) re-
+ward data distilled from GPT-4o is used to explicitly teach the model
+the required reasoning format and structure. Specifically, we first
+prepare a set of training data, each consisting of a multimodal claim,
+multimodal evidence, and a corresponding question prompt. These
+samples are then input into GPT-4o to generate detailed long-chain
+reasoning processes and the final answers. From the generated
+samples, we retain only those whose reasoning trajectories lead to
+the correct answers. All reasoning processes are enclosed within
+<think> tags. The training process is driven by minimizing the
+cross-entropy loss between the model’s predicted output and the
+correct answers. The cross-entropy loss LCE is defined as:
+LCE = −
+𝑁
+∑︁
+𝑖=1
+𝑝true(𝑦𝑖) log𝑝pred(𝑦𝑖)
+(5)
+where 𝑝true(𝑦𝑖) is the true probability distribution of the correct an-
+swer, and 𝑝pred(𝑦𝑖) is the predicted probability distribution for each
+sample 𝑦𝑖. After the cold-start training phase, we prompt the model
+to generalize CoT reasoning across the remaining fact-checking
+training data, leveraging the prior knowledge acquired during ini-
+tialization.
+Rejection Sampling. After Cold Start training, we further guide
+and expand the model’s reasoning capabilities in fact-checking.
+We apply rejection sampling to reinforce the learning of correct
+fact-enhanced reasoning patterns. Specifically, We retain only those
+samples whose reasoning aligns with the correct final answer and
+apply rejection sampling to filter out incorrect or low-quality rea-
+soning. For correct samples, we sample with varying temperatures
+and select the preferred reasoning via manual diversity evaluation.
+This process focuses the training distribution on accurate reason-
+ing patterns and enhances the model’s generalization ability across
+different visual domains.
+Group Relative Policy Optimization. We apply GRPO to fine-
+tune the model’s policy without relying on an explicit value function
+or a separate critic network. GRPO estimates the relative quality
+of responses within a group by comparing the outputs generated
+under the current policy. Given an input, the model samples a
+set of candidate outputs {𝑦1,𝑦2, . . . ,𝑦𝐺}, each assigned a reward
+based on its correctness or alignment with human preferences. The
+normalized advantage for each response 𝑦𝑖is computed as:
+LGRPO = 1
+𝐺
+𝐺
+∑︁
+𝑖=1
+ 
+min
+ 
+𝜋𝜃(𝑦𝑖)
+𝜋old(𝑦𝑖) 𝐴𝑖,
+clip
+ 𝜋𝜃(𝑦𝑖)
+𝜋old(𝑦𝑖) , 1 −𝜖, 1 + 𝜖
+
+𝐴𝑖
+!!
+−𝛽DKL(𝜋𝜃∥𝜋ref)
+(6)
+Here, 𝜋𝜃represents the current policy, 𝜋old is the sampling policy
+used for generating the responses, and 𝜋ref is a fixed reference
+model. In our setup, each candidate 𝑦𝑖corresponds either to a
+model-generated output 𝑦pred or a human-annotated label 𝑦label,
+allowing us to optimize both relative preferences and ground-truth
+accuracy. In reinforcement learning, rewards provide the training
+signals that guide optimization. To train FACTCOMPASS, we design
+a rule-based reward system with two main components: Accuracy
+Reward and Format Reward. These rewards are aimed at ensuring
+both the quality and accuracy of model responses: (1) Accuracy
+Reward: The accuracy reward𝑟acc is used to evaluate the correctness
+of the model’s output. It is computed by comparing the model’s
+predicted class with the true class, encouraging the model to match
+the true label. This is formalized as:
+𝑟acc =
+(
+1,
+if model’s prediction is correct
+0,
+otherwise
+(7)
+(2) Format Reward: In addition to accuracy, we incorporate a format
+reward 𝑟format to ensure that the model encapsulates its reasoning
+process within the proper output structure, specifically requiring
+reasoning to be enclosed within the <think> and </think> tags.
+The final reward function 𝑅(𝑞,𝑦) combines these two rewards
+and can be expressed as:
+𝑅(𝑞,𝑦) = 𝑟acc + 𝑟format
+(8)
+1845
+
+
+
+===== PAGE 6 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+Fanrui Zhang et al.
+Table 1: Accuracy (%) comparison with state-of-the-art meth-
+ods on three English datasets. News denotes the NewsCLIP-
+pings dataset. Values marked with * are reported from previ-
+ous papers.
+Methods
+News
+OOC-MFC
+VERITE
+BERT
+61.1*
+68.9
+60.3
+CLIP
+66.0*
+72.7
+63.6
+CCN
+84.7*
+84.9
+79.3
+SNIFFER
+88.4*
+76.3
+74.4
+RED-DOT
+90.3*
+85.3
+76.9*
+AITR
+93.3*
+88.1
+82.7*
+DEFAME
+86.6
+89.0
+79.8*
+InternVL-2.5
+74.7
+70.1
+66.6
+Qwen2.5-VL
+79.3
+75.5
+70.0
+Gemini2-thinking
+80.8
+73.4
+70.6
+GPT-4o
+82.2
+84.4*
+73.6*
+Grok-4
+84.5
+86.9
+72.7
+FACTCOMPASS
+92.2
+90.2
+84.1
+Table 2: Accuracy (%) comparison with state-of-the-art meth-
+ods on two Chinese datasets.
+Methods
+CCMF
+SCMF
+CCN
+79.3*
+84.9*
+Triple-Check
+83.2*
+81.3*
+ESCNet
+86.2*
+84.9*
+InternVL-2.5
+63.3
+60.6
+Qwen2.5-VL
+78.8
+77.1
+Gemini2-thinking
+76.4
+79.6
+GPT-4o
+79.9
+82.7
+Grok-4
+82.1
+83.2
+FACTCOMPASS
+88.4
+87.7
+Table 3: Evaluation of the influence of different components
+of FACTCOMPASS on the OOC-MFC dataset.
+Methods
+Acc
+Prec
+Rec
+F1
+w/o Evidence Image
+85.8
+86.3
+86.2
+86.3
+w/o Semantic-enhance
+86.5
+87.0
+86.9
+86.9
+w/o RefineAgent
+84.5
+85.7
+85.0
+85.3
+w/o Knowledge Graph
+87.4
+87.4
+87.6
+87.5
+w/o Knowlege Base
+88.4
+88.3
+88.4
+88.4
+w/o Cold Start
+79.9
+82.4
+80.8
+81.6
+w/o Reject
+88.7
+88.9
+88.5
+88.7
+w/o GRPO
+87.2
+87.1
+87.3
+87.2
+FACTCOMPASS
+90.2
+87.5
+88.4
+88.0
+4
+Experiments
+4.1
+Experimental Settings
+Dataset. Due to the limitations of available training data, we for-
+mulate our task as a binary classification problem. We evaluate
+the proposed method on three widely used English benchmark
+datasets—NewsCLIPpings[22], OOC-MFC[39], and VERITE[25]—as
+Figure 4: The impact of explainability from five models on
+GPT-4o review accuracy.
+well as the Chinese datasets: CCMF and SCMF[48]. (1) NewsCLIP-
+pings is designed to detect mismatches between images and cap-
+tions. Its samples are drawn directly from real news content in the
+VisualNews corpus [20], where both the images and captions remain
+unaltered, though some are mismatched. We follow the standard
+protocol by using the provided balanced subset with corresponding
+evidence, treating the task as binary classification and reporting
+accuracy (Acc) as the evaluation metric. Evidence retrieval and
+augmentation follow the method described in [1]. (2) OOC-MFC,
+from the MFC-Bench benchmark [39], evaluates a model’s ability to
+detect image-text inconsistencies in context. Although both modal-
+ities are individually accurate, their semantic alignment may be
+incorrect. (3) Furthermore, we evaluate our model on the VERITE
+benchmark [25], which includes 1,000 annotated samples: 338 truth-
+ful pairs, 338 miscaptioned images, and 324 out-of-context instances.
+Following the OOD-CV protocol, we use the external evidence pro-
+vided by [27], and report the “True vs OOC” accuracy along with
+standard deviation. (4) Finally, we evaluate our model on the CMFC
+benchmark, a large-scale Chinese multimodal fact-checking dataset
+comprising 46K claims. It includes two subsets: CCMF and SCMF.
+The dataset spans diverse domains such as politics, health, science,
+and culture. We also review several related benchmarks excluded
+from our evaluation due to task or format differences. AVeriTeC [32]
+contains 500 text-based claims labeled as Supported, Refuted, Not
+Enough Information (NEI), and Conflicting/Cherrypicking (C/CP),
+focusing on claim–evidence reasoning without a training set. Fac-
+tify [23] includes 50K multimodal claims across five fine-grained
+classes, emphasizing detailed evidence relations beyond binary de-
+tection. MOCHEG [45] provides 15,601 text-only claims with textual
+and visual evidence for retrieval, verification, and explanation tasks,
+thus not directly comparable. CLAIMREVIEW2024+ [5] introduces
+300 recent fact-checking claims (160 unimodal, 140 multimodal)
+labeled as Supported, Refuted, Misleading, or NEI, but its small scale
+and four-way setup differ from our binary evaluation.
+Baselines. We compare our method against a diverse set of multi-
+modal misinformation detection and general-purpose vision-language
+baselines. BERT [8] serves as a strong text-only baseline using
+bidirectional transformers for contextual representation learning.
+CLIP [30] aligns image-text pairs via contrastive learning and is
+widely adopted as a multimodal backbone. CCN [1] extends CLIP
+to evaluate intra- and cross-modal consistency between claims
+1846
+
+
+
+===== PAGE 7 =====
+Navigating Truth in Multimodal Fact-checking via Retrieval- and Reasoning-Enhanced Large Language Models
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+Evidence image
+SearchAgent
+RefineAgent
+Text: A Turkish man 
+stands next to a bank 
+window that was 
+damaged during riots 
+after antigovernment 
+demonstrations on June 5 
+2013 in Istanbul Turkey
+GT: Fake
+US justice department investigates Iran allegations. 
+Standard Chartered bank accused of scheming with Iran to 
+hide transactions. About 60,000 transactions were 
+involved between 2001 and 2007 and the bank faces losing 
+its ability to trade in the US if the allegations are proven. 
+Discussions continue and the bank said it was …
+Evidence image
+SearchAgent
+RefineAgent
+Text: A brand new
+Toyota Camry sits on 
+the sales lot at City 
+Toyota in Daly City 
+Calif in this 2010 file 
+photo
+GT: Fake
+The Festival of Power drag racing meet at Santa Pod Raceway 
+Northampton UK Pro Modified Class Elimination round burn 
+out at the start line. Syrians walk past a burning motorcycle at 
+the site of a car bomb explosion in the northern Syrian Kurdish 
+town of Tal Abyad, on the border with... Drag Race Start Stock-
+Fotos und Bilder - Getty Images. Santa Pod Photos and…
+Evidence image
+SearchAgent
+RefineAgent
+Text: Passengers are 
+stranded outside the 
+Guangzhou railway station 
+in China s Guangdong 
+province on Tuesday
+GT: Fake
+Under the umbrellas: what do Hong Kong's protesters want 
+from China. High-school demonstrators hold signs during a 
+protest outside the headquarters of Legislative Council in Hong 
+Kong. The protests were predominantly led by young people. 
+The placards read "Hope comes from the people, change begins 
+from struggle" and "peaceful struggle, no compromises". ..
+Evidence image
+SearchAgent
+RefineAgent
+Text: The memorial is 
+next to the People s 
+Palace in Glasgow
+GT: Real
+KG: Glasgow is a city located in Scotland. It has a 
+population of approximately 598,830 people. 
+Glasgow has an area of 175.5 km²… 
+KB: Glasgow ,city in Scotland, United Kingdom.
+People's Palace at Glasgow Green, tells the story of the 
+people of Glasgow. A favourite dog walking spot for 
+myself and Lucy. Glasgow City, Glasgow Green, Uk 
+Culture, Places In Scotland, Glasgow Scotland, Highlands 
+Scotland, Countries To Visit, Green Park, Earth…
+(a)
+(b)
+(c)
+(d)
+KG: Hong Kong protests started on March 31, 
+2019, and continued until December 13, 2019. ..
+KB: Hong Kong,city and special administrative 
+region of China
+KG: Drag racing is a motorsport genre that originated 
+in the United States. It was founded in 1950 and is…
+KB: Santa Pod Raceway : Europe's first permanent 
+drag racing venue for 1/4 and 1/8 mile racing.
+KG: England, a country located in the United 
+Kingdom, has its capital in London. .. The official 
+language is English, 
+KB: Bank : financial institution that accepts deposits
+...
+...
+...
+Prediction
+<think>The main news image shows an office environment 
+with flags visible through a glass window, which does not align 
+with the claim in the title about a Turkish man standing next to 
+a damaged bank window during riots. The evidence images 
+depict scenes of protests, graffiti, and damage, including a man 
+standing near a damaged window with graffiti, a bus with 
+graffiti, and a bakery scene...</think><answer>Yes.</answer>
+Prediction
+<think>The main news image depicts a drag racing car at Santa 
+Pod Raceway, which is unrelated to the claim in the news title 
+about a brand new Toyota Camry on a sales lot in Daly City, 
+California. However, the main image is clearly manipulated... The 
+text-based evidence does not provide relevant information to 
+support the main image's connection to the claim, further 
+confirming manipulation.</think><answer>Yes.</answer>
+Prediction
+<think>The main news image depicts individuals holding 
+protest signs, which is inconsistent with the claim that 
+passengers are stranded outside Guangzhou railway station in 
+Guangdong province. The evidence images... Additionally, the 
+text evidence references Hong Kong's \"Umbrella Protests,\" 
+which are unrelated to the situation described in the news title. 
+This suggests the main new...</think><answer>Yes.</answer>
+Prediction
+<think>The main news image depicts a sunset over a body of 
+water, with a distant landmass visible on the horizon. This 
+aligns with the claim that the Turkish mainland is visible from 
+Lesbos, Greece, during sunrise or sunset. The evidence images 
+include scenes of a beach with life…The text evidence discusses 
+sunsets and beaches in general but does not provide specific 
+geographical or scientific...</think><answer>No.</answer>
+Figure 5: Four examples of FACTCOMPASS making correct predictions. KG represents the Knowledge Graph, KB represents
+the Knowledge Base. The selected images for retrieval are highlighted with yellow boxes.
+and retrieved evidence. SNIFFER [29], built upon InstructBLIP, per-
+forms domain-specific instruction tuning for interpretable out-of-
+context misinformation detection. InternVL-2.5 [7] integrates a
+large ViT vision tower and bilingual LLM for bidirectional mul-
+timodal fusion. Triple-Check [11] employs a three-stage verifica-
+tion pipeline combining internal consistency analysis, external evi-
+dence retrieval, and unified reasoning. Gemini2-thinking [36] and
+GPT-4o [24] are advanced native multimodal transformers capable
+of unified text-image reasoning, while Grok-4 [41] offers strong
+general-purpose reasoning capabilities. DEFAME [5] performs zero-
+shot six-stage fact-checking via tool invocation and structured
+justification generation. Qwen2.5-VL [4] enhances vision encoding
+through ViT–transformer interaction and multimodal pretraining.
+Finally, AITR [27] and RED-DOT [26] model evidence similarity
+and relevance–veracity separation via attention-guided fusion and
+joint optimization. Together, these baselines encompass a broad
+spectrum of multimodal reasoning and retrieval paradigms for com-
+prehensive comparison.
+Implementation Details. All core experiments were conducted
+three times, and the mean values are reported. We adopt Qwen2.5-
+VL as the base MLLM, and the training process consists of three
+stages. DBpedia [2] serves as the background knowledge graph.
+All experiments are implemented in PyTorch and executed on four
+NVIDIA Tesla H100 GPUs. In the Semantic-enhanced Retrieval Mod-
+ule, the number of evidence images is set to 3; in the SearchAgent, the
+pre-trained model for converting graph triples into token sequences
+is gpt4o-mini; and in the RefineAgent, the similarity threshold is 0.7.
+In Stage 1 (Cold Start), we initialize training with 20K high-quality
+GPT-4o-generated samples from the NewsCLIPpings dataset, evenly
+split between real and fake claims. The visual encoder is frozen,
+and LoRA is applied for efficient fine-tuning with lora_r = 128,
+lora_alpha = 256, and lr = 2e-5; the multimodal projector uses
+a learning rate of 2e-6. Training runs for 2 epochs with a batch
+size of 2 using AdamW and cosine annealing scheduling. In Stage 2
+(Rejection Sampling), we retain model-generated responses with
+accurate reasoning and manually select the best explanations from
+three temperature-varied outputs (0–1), yielding 20K refined sam-
+ples. LoRA is reused with lora_r = 64, lora_alpha = 128, and
+lr = 2e-5, while keeping the projector learning rate at 2e-6 and
+the visual encoder frozen. In Stage 3 (GRPO), Group-based Relative
+Policy Optimization is applied with a verifiability-based reward.
+The model samples eight candidate outputs per input and is trained
+for 2 epochs on 20K news samples with lr = 2e-5. Final results
+are reported as the average over three independent runs to ensure
+stability and reliability.
+4.2
+Comparison to SOTA
+(1) As shown in Table 1 on the three English datasets, early models
+such as CLIP [30], and BERT [9] demonstrate limited robustness
+and shallow semantic alignment. Recent approaches like CCN [1]
+improve performance by integrating external knowledge and sym-
+bolic reasoning, while SNIFFER [29] provides explainable outputs
+but lacks fine-grained evidence-level modeling.RED-DOT [26] sep-
+arates evidence relevance from veracity prediction in a unified
+transformer. AITR [27] introduces a simple yet effective baseline
+1847
+
+
+
+===== PAGE 8 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+Fanrui Zhang et al.
+for multimodal similarity evaluation. Closed-source models includ-
+ing GPT-4o [24], Gemini2-thinking [36] and Grok-4 [41] achieve
+the strongest overall results, highlighting their powerful reasoning
+capabilities. Meanwhile, open-source models such as Qwen2.5-VL
+also perform competitively, underscoring the growing potential of
+open MLLMs. (2) As shown in Table 2 on the two Chinese datasets,
+our method achieves the best overall performance on both bench-
+marks. Qwen2.5-VL exhibits strong zero-shot results due to its
+superior Chinese understanding ability. Triple-Check [11] follows
+a three-stage pipeline—internal consistency checking with light-
+weight attention. ESCNet combines entity-aware modeling with
+cross-modal stance verification and obtains competitive results with
+a lightweight attention mechanism. Compared to these, FACTCOM-
+PASS integrates semantic and knowledge-enhanced retrieval with
+a self-refining reinforcement strategy to improve evidence align-
+ment, knowledge-level verification, and robust reasoning against
+misinformation.
+4.3
+Explainability Analysis
+To further assess effectiveness in revealing misinformation, we se-
+lected a subset of 100 challenging multimodal claims that all five
+models in Figure 4 failed to classify correctly—comprising 50 real
+claims incorrectly predicted as fake, and 50 fake claims incorrectly
+predicted as real, resulting in 0% accuracy across the board. For
+each instance, we retained the model-generated explanation. To
+simulate human fact-checking, we designed a prompt that inputs
+each claim and its explanation into GPT-4o, asking it to make a
+secondary judgment (real or fake). As shown in Figure 4, expla-
+nations generated by FACTCOMPASS significantly improved the
+secondary review accuracy, while GPT-4o’s own explanations of-
+ten amplified hallucinations and biases. Additional analysis can be
+found in Supplementary Materials.
+4.4
+Ablation Studies
+We conduct ablation studies to evaluate the impact of each mod-
+ule in FACTCOMPASS, as shown in Table 3. (1) For the Semantic-
+enhanced Retrieval Module, removing either the evidence image
+token (w/o Evidence Image) or the retrieval module (w/o Retrieval,
+replaced with CLIP similarity) leads to notable performance drops,
+highlighting the module’s importance for aligning visual evidence.
+(2) For the Knowledge-enhanced Retrieval Module, omitting the
+RefineAgent degrades performance, confirming its role in extract-
+ing concise, relevant information from textual evidence. Removing
+either the knowledge graph or knowledge base from the SearchA-
+gent also reduces accuracy, demonstrating the benefit of multi-level
+external knowledge. (3) Finally, ablating components of the self-
+refining reinforcement fine-tuning strategy—w/o Cold Start, w/o
+Reject, and w/o GRPO—shows that each stage plays a critical role in
+gradually enhancing the model’s reasoning ability.
+4.5
+Qualitative Evaluation
+Figure 5 presents four examples that were correctly identified, with
+enhanced evidence text and evidence image provided by the two
+retrieval modules. By examining these examples, we observe that
+our semantic-enhanced retrieval module can effectively uncover
+evidence images semantically similar to the claim image and re-
+fine the associated evidence text. Furthermore, the SearchAgent
+effectively captures key knowledge embedded in the claim image,
+providing valuable background information for the news content.
+For instance, in example (c), the news content is relatively obscure,
+but by retrieving the entity ‘Hong Kong’ and its contextual de-
+scription, the model fully comprehends the news, aiding in fake
+claim detection. In example (d), By converting news background
+knowledge into textual modality, the model improves its under-
+standing of world locations like ‘Glasgow’ in relation to the claim
+image, thereby enhancing the multimodal fact-checking process.
+Furthermore, our model not only produces accurate predictions but
+also generates coherent and interpretable reasoning chains.
+5
+Conclusion
+We propose FACTCOMPASS, a comprehensive and unified multi-
+modal fact-checking framework designed to enhance both reason-
+ing depth and retrieval precision through three synergistic com-
+ponents: semantic-enhanced evidence image retrieval, knowledge-
+enriched textual refinement, and a self-refining reinforcement fine-
+tuning strategy. By jointly optimizing semantic understanding,
+knowledge grounding, and reasoning adaptability, FACTCOMPASS
+achieves more accurate and interpretable multimodal fact verifi-
+cation. Extensive experiments further validate its superior per-
+formance, robust reasoning ability, and high interpretability in
+misinformation detection and related applications.
+Acknowledgments
+This work was supported by the National Natural Science Founda-
+tion of China (NSFC) under Grant 62225207, 62476260 and 62436008,
+the Fundamental Research Funds for the Central Universities under
+Grant WK2100000057.
+References
+[1] Sahar Abdelnabi, Rakibul Hasan, and Mario Fritz. 2022. Open-Domain, Content-
+based, Multi-modal Fact-checking of Out-of-Context Images via Online Resources.
+In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition. 14940–14949.
+[2] Sören Auer, Christian Bizer, Georgi Kobilarov, Jens Lehmann, Richard Cyganiak,
+and Zachary Ives. 2007. Dbpedia: A nucleus for a web of open data. In international
+semantic web conference. Springer, 722–735.
+[3] Jinze Bai, Shuai Bai, Shusheng Yang, Shijie Wang, Sinan Tan, Peng Wang, Junyang
+Lin, Chang Zhou, and Jingren Zhou. 2023. Qwen-vl: A versatile vision-language
+model for understanding, localization, text reading, and beyond. arXiv preprint
+arXiv:2308.12966 1, 2 (2023), 3.
+[4] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, Sibo Song, Kai
+Dang, Peng Wang, Shijie Wang, Jun Tang, Humen Zhong, Yuanzhi Zhu, Mingkun
+Yang, Zhaohai Li, Jianqiang Wan, Pengfei Wang, Wei Ding, Zheren Fu, Yiheng
+Xu, Jiabo Ye, Xi Zhang, Tianbao Xie, Zesen Cheng, Hang Zhang, Zhibo Yang,
+Haiyang Xu, and Junyang Lin. 2025. Qwen2.5-VL Technical Report. arXiv preprint
+arXiv:2502.13923 (2025).
+[5] Tobias Braun, Mark Rothermel, Marcus Rohrbach, and Anna Rohrbach. 2025.
+DEFAME: Dynamic Evidence-based FAct-checking with Multimodal Experts. In
+Proceedings of the 42nd International Conference on Machine Learning.
+https:
+//arxiv.org/abs/2412.10510
+[6] Han Cao, Lingwei Wei, Wei Zhou, and Songlin Hu. 2024. Multi-source Knowledge
+Enhanced Graph Attention Networks for Multimodal Fact Verification. In 2024
+IEEE International Conference on Multimedia and Expo (ICME). IEEE, 1–6.
+[7] Zhe Chen, Jiannan Wu, Wenhai Wang, Weijie Su, Guo Chen, Sen Xing, Muyan
+Zhong, Qinglong Zhang, Xizhou Zhu, Lewei Lu, et al. 2024. Internvl: Scaling
+up vision foundation models and aligning for generic visual-linguistic tasks. In
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition.
+24185–24198.
+1848
+
+
+
+===== PAGE 9 =====
+Navigating Truth in Multimodal Fact-checking via Retrieval- and Reasoning-Enhanced Large Language Models
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+[8] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2018. Bert:
+Pre-training of deep bidirectional transformers for language understanding. arXiv
+preprint arXiv:1810.04805 (2018).
+[9] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. Bert:
+Pre-training of deep bidirectional transformers for language understanding. In
+Proceedings of the 2019 conference of the North American chapter of the association
+for computational linguistics: human language technologies, volume 1 (long and
+short papers). 4171–4186.
+[10] Abhishek Dhankar, Osmar R. Zaïane, and Francois Bolduc. 2022. UofA-Truth
+at Factify 2022 : Transformer And Transfer Learning Based Multi-Modal Fact-
+Checking. arXiv:2203.07990 [cs.MM]
+[11] Wei-Wei Du, Hong-Wei Wu, Wei-Yao Wang, and Wen-Chih Peng. 2023. Team
+Triple-Check at Factify 2: Parameter-Efficient Large Foundation Models with Fea-
+ture Representations for Multi-Modal Fact Verification. arXiv preprint arXiv:2302
+(2023).
+[12] Jie Gao, Hella-Franziska Hoffmann, Stylianos Oikonomou, David Kiskovski, and
+Anil Bandhakavi. 2021. Logically at Factify 2022: Multimodal Fact Verfication.
+ArXiv abs/2112.09253 (2021).
+[13] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin
+Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. 2025. Deepseek-r1:
+Incentivizing reasoning capability in llms via reinforcement learning. arXiv
+preprint arXiv:2501.12948 (2025).
+[14] Zhijiang Guo, Michael Schlichtkrull, and Andreas Vlachos. 2022. A survey on
+automated fact-checking. Transactions of the Association for Computational
+Linguistics 10 (2022), 178–206.
+[15] Xuming Hu, Zhijiang Guo, Junzhe Chen, Lijie Wen, and Philip S Yu. 2023. Mr2: A
+benchmark for multimodal retrieval-augmented rumor detection in social media.
+In Proceedings of the 46th International ACM SIGIR Conference on Research and
+Development in Information Retrieval. 2901–2912.
+[16] Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky,
+Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, et al. 2024.
+Openai o1 system card. arXiv preprint arXiv:2412.16720 (2024).
+[17] Ayush Jaiswal, Ekraam Sabir, Wael AbdAlmageed, and Premkumar Natarajan.
+2017. Multimedia semantic integrity assessment using joint embedding of images
+and text. In Proceedings of the 25th ACM international conference on Multimedia.
+1465–1471.
+[18] Dhruv Khattar, Jaipal Singh Goud, Manish Gupta, and Vasudeva Varma. 2019.
+Mvae: Multimodal variational autoencoder for fake news detection. In The world
+wide web conference. 2915–2921.
+[19] Junnan Li, Dongxu Li, Silvio Savarese, and Steven C. H. Hoi. 2023. BLIP-2: Boot-
+strapping Language-Image Pre-training with Frozen Image Encoders and Large
+Language Models. In International Conference on Machine Learning (Proceed-
+ings of Machine Learning Research, Vol. 202), Andreas Krause, Emma Brunskill,
+Kyunghyun Cho, Barbara Engelhardt, Sivan Sabato, and Jonathan Scarlett (Eds.).
+19730–19742.
+[20] Fuxiao Liu, Yinghan Wang, Tianlu Wang, and Vicente Ordonez. 2020.
+Vi-
+sualNews : Benchmark and Challenges in Entity-aware Image Captioning.
+arXiv:2010.03743 [cs.CV]
+[21] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. 2023. Visual Instruc-
+tion Tuning. In Advances in Neural Information Processing Systems.
+[22] Grace Luo, Trevor Darrell, and Anna Rohrbach. 2021. Newsclippings: Automatic
+generation of out-of-context multimodal media. arXiv preprint arXiv:2104.05893
+(2021).
+[23] Shreyash Mishra, S Suryavardan, Amrit Bhaskar, Parul Chopra, Aishwarya Re-
+ganti, Parth Patwa, Amitava Das, Tanmoy Chakraborty, Amit Sheth, Asif Ekbal,
+et al. 2022. Factify: A multi-modal fact verification dataset. In Proceedings of
+the First Workshop on Multimodal Fact-Checking and Hate Speech Detection (DE-
+FACTIFY).
+[24] OpenAI. 2023. GPT-4V(ision) System Card. https://cdn.openai.com/papers/
+GPTV_System_Card.pdf.
+[25] Stefanos-Iordanis Papadopoulos, Christos Koutlis, Symeon Papadopoulos, and
+Panagiotis C Petrantonakis. 2024. Verite: a robust benchmark for multimodal
+misinformation detection accounting for unimodal bias. International Journal of
+Multimedia Information Retrieval 13, 1 (2024), 4.
+[26] Stefanos-Iordanis Papadopoulos, Christos Koutlis, Symeon Papadopoulos, and
+Panagiotis C Petrantonakis. 2025. Red-dot: Multimodal fact-checking via relevant
+evidence detection. IEEE Transactions on Computational Social Systems (2025).
+[27] Stefanos-Iordanis Papadopoulos, Christos Koutlis, Symeon Papadopoulos, and
+Panagiotis C Petrantonakis. 2025.
+Similarity over Factuality: Are we mak-
+ing progress on multimodal out-of-context misinformation detection?. In 2025
+IEEE/CVF Winter Conference on Applications of Computer Vision (WACV). IEEE,
+5041–5050.
+[28] Parth Patwa, Shreyash Mishra, S Suryavardan, Amrit Bhaskar, Parul Chopra,
+Aishwarya N. Reganti, Amitava Das, Tanmoy Chakraborty, A. Sheth, Asif Ekbal,
+and Chaitanya Ahuja. 2022. Benchmarking Multi-Modal Entailment for Fact
+Verification (short paper). In DE-FACTIFY@AAAI.
+[29] Peng Qi, Zehong Yan, Wynne Hsu, and Mong Li Lee. 2024. Sniffer: Multimodal
+large language model for explainable out-of-context misinformation detection. In
+Proceedings of the IEEE/CVF conference on computer vision and pattern recognition.
+13052–13062.
+[30] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh,
+Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark,
+Gretchen Krueger, and Ilya Sutskever. 2021. Learning Transferable Visual Models
+From Natural Language Supervision. In Proceedings of the 38th International
+Conference on Machine Learning, 2021, 18-24 July 2021, Virtual Event (Proceedings
+of Machine Learning Research, Vol. 139), Marina Meila and Tong Zhang (Eds.).
+PMLR, 8748–8763. http://proceedings.mlr.press/v139/radford21a.html
+[31] Ekraam Sabir, Wael AbdAlmageed, Yue Wu, and Prem Natarajan. 2018. Deep
+multimodal image-repurposing detection. In Proceedings of the 26th ACM inter-
+national conference on Multimedia. 1337–1345.
+[32] Michael Schlichtkrull, Zhijiang Guo, and Andreas Vlachos. 2023. Averitec: A
+dataset for real-world claim verification with evidence from the web. Advances
+in Neural Information Processing Systems 36 (2023), 65128–65167.
+[33] Hao Shao, Shengju Qian, Han Xiao, Guanglu Song, Zhuofan Zong, Letian Wang,
+Yu Liu, and Hongsheng Li. 2024. Visual cot: Advancing multi-modal language
+models with a comprehensive dataset and benchmark for chain-of-thought rea-
+soning. Advances in Neural Information Processing Systems 37 (2024), 8612–8642.
+[34] S Suryavardan, Shreyash Mishra, Parth Patwa, Megha Chakraborty, Anku Rani,
+Aishwarya Reganti, Aman Chadha, Amitava Das, Amit Sheth, Manoj Chinnakotla,
+et al. 2023. Factify 2: A multimodal fake news and satire news dataset. arXiv
+preprint arXiv:2304.03897 (2023).
+[35] Sahar Tahmasebi, Eric Müller-Budack, and Ralph Ewerth. 2024. Multimodal
+misinformation detection using large vision-language models. In Proceedings of
+the 33rd ACM International Conference on Information and Knowledge Management.
+2189–2199.
+[36] Gemini Team, Rohan Anil, Sebastian Borgeaud, Jean-Baptiste Alayrac, Jiahui
+Yu, Radu Soricut, Johan Schalkwyk, Andrew M Dai, Anja Hauth, Katie Millican,
+et al. 2023. Gemini: a family of highly capable multimodal models. arXiv preprint
+arXiv:2312.11805 (2023).
+[37] Gemini Team, Petko Georgiev, Ving Ian Lei, Ryan Burnell, Libin Bai, Anmol
+Gulati, Garrett Tanzer, Damien Vincent, Zhufeng Pan, Shibo Wang, et al. 2024.
+Gemini 1.5: Unlocking multimodal understanding across millions of tokens of
+context. arXiv preprint arXiv:2403.05530 (2024).
+[38] Jonathan Tonglet, Gabriel Thiem, and Iryna Gurevych. 2025. COVE: COntext and
+VEracity prediction for out-of-context images. arXiv preprint arXiv:2502.01194
+(2025).
+[39] Shengkang Wang, Hongzhan Lin, Ziyang Luo, Zhen Ye, Guang Chen, and Jing
+Ma. 2024. MFC-Bench: Benchmarking Multimodal Fact-Checking with Large
+Vision-Language Models. arXiv preprint arXiv:2406.11288 (2024).
+[40] Yibin Wang, Zhimin Li, Yuhang Zang, Chunyu Wang, Qinglin Lu, Cheng Jin, and
+Jiaqi Wang. 2025. Unified multimodal chain-of-thought reward model through
+reinforcement fine-tuning. arXiv preprint arXiv:2505.03318 (2025).
+[41] xAI. 2025. Grok-4. https://x.ai/grok. Large Language Model developed by xAI.
+[42] Guowei Xu, Peng Jin, Li Hao, Yibing Song, Lichao Sun, and Li Yuan. 2024. Llava-o1:
+Let vision language models reason step-by-step. arXiv preprint arXiv:2411.10440
+(2024).
+[43] Jilan Xu, Yifei Huang, Junlin Hou, Guo Chen, Yuejie Zhang, Rui Feng, and Weidi
+Xie. 2024. Retrieval-augmented egocentric video captioning. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition. 13525–13536.
+[44] Keyang Xuan, Li Yi, Fan Yang, Ruochen Wu, Yi R Fung, and Heng Ji. 2024.
+LEMMA: towards lvlm-enhanced multimodal misinformation detection with
+external knowledge augmentation. arXiv preprint arXiv:2402.11943 (2024).
+[45] Barry Menglong Yao, Aditya Shah, Lichao Sun, Jin-Hee Cho, and Lifu Huang. 2022.
+End-to-end multimodal fact-checking and explanation generation: A challenging
+dataset and models. arXiv preprint arXiv:2205.12487 (2022).
+[46] Alex Young, Bei Chen, Chao Li, Chengen Huang, Ge Zhang, Guanwei Zhang,
+Guoyin Wang, Heng Li, Jiangcheng Zhu, Jianqun Chen, et al. 2024. Yi: Open
+foundation models by 01. ai. arXiv preprint arXiv:2403.04652 (2024).
+[47] Fanrui Zhang, Dian Li, Qiang Zhang, Jun Chen, Gang Liu, Junxiong Lin, Jiahong
+Yan, Jiawei Liu, and Zheng-Jun Zha. 2025. Fact-R1: Towards Explainable Video
+Misinformation Detection with Deep Reasoning. arXiv preprint arXiv:2505.16836
+(2025).
+[48] Fanrui Zhang, Jiawei Liu, Jingyi Xie, Qiang Zhang, Yongchao Xu, and Zheng-Jun
+Zha. 2024. Escnet: Entity-enhanced and stance checking network for multi-modal
+fact-checking. In Proceedings of the ACM Web Conference 2024. 2429–2440.
+[49] Fanrui Zhang, Jiawei Liu, Qiang Zhang, Esther Sun, Jingyi Xie, and Zheng-Jun
+Zha. 2023. Ecenet: explainable and context-enhanced network for muti-modal fact
+verification. In Proceedings of the 31st ACM International Conference on Multimedia.
+1231–1240.
+[50] Fanrui Zhang, Qiang Zhang, Sizhuo Zhou, Jianwen Sun, Chuanhao Li, Jiaxin
+Ai, Yukang Feng, Yujie Zhang, Wenjie Li, Zizhen Li, et al. 2025. Code-in-the-
+Loop Forensics: Agentic Tool Use for Image Forgery Detection. arXiv preprint
+arXiv:2512.16300 (2025).
+[51] Deyao Zhu, Jun Chen, Xiaoqian Shen, Xiang Li, and Mohamed Elhoseiny. 2023.
+MiniGPT-4: Enhancing Vision-Language Understanding with Advanced Large
+Language Models. arXiv preprint arXiv:2304.10592 (2023).
+1849
+
+
+
+===== PAGE 10 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+Fanrui Zhang et al.
+Claim Text
+Claim Image
+SNIFFER
+GPT4o
+FACTCOMPASS
+On the one hand, the caption refers to an oil tanker 
+being moved into position, while the image shows a 
+tugboat assisting with the maneuvering. On the other 
+hand, the image lacks clear indicators of the Fawley 
+Refinery, making the location reference unclear. 
+Therefore, the image seems to be mismatched with the 
+caption.
+#1: Oil tanker being 
+moved into position at 
+Fawley Refinery in 
+Southampton
+On the one hand, the caption refers to a SWAT 
+team responding to a report of multiple people shot, 
+indicating a serious crime scene and potentially a 
+life-threatening situation. On the other hand, the 
+image shows law enforcement vehicles parked on a 
+forested road, but it doesn‘t clearly depict a SWAT 
+team in action or any immediate signs of a shooting 
+incident。
+#2: A SWAT team 
+responded to a report of 
+multiple people shot in 
+Belfair Wash Feb 26 2016
+On the one hand, the caption refers to "Rittenhouse 
+Square in Philadelphia," a city known for its 
+history and culture. On the other hand, the image, 
+while showing a street scene with American flags 
+and tall buildings, reflects the urban vibe and 
+cultural ambiance often associated with major 
+cities like Philadelphia.
+#3: Rittenhouse Square 
+in Philadelphia a city 
+known for its history and 
+culture
+#4: Ted Cruz greets 
+supporters on April 5 
+2016 in Milwaukee
+On the one hand, the caption refers to Ted Cruz 
+greeting supporters on April 5, 2016, in Milwaukee, 
+which aligns with the image showing Ted Cruz 
+speaking to an audience, likely at a campaign event. 
+On the other hand, the image features Cruz in front of 
+a backdrop with his name and the word "TED," 
+which is consistent with campaign visuals. The 
+setting appears to be a rally, and Cruz is actively 
+engaging with the crowd, matching the context of 
+him greeting supporters.
+<think>The main news image shows a tugboat labeled 
+\"THRAX\" assisting an oil tanker near a refinery, which aligns 
+with the claim in the title. The evidence images are consistent with 
+the scene depicted in the main image, showing similar angles and 
+elements such as the tugboat, oil tanker, and refinery infrastructure. 
+There are no indications of manipulation or inconsistency between 
+the images and the claim. Despite the failure to fetch text-based 
+evidence from the knowledge base and graph, the visual evidence 
+supports the claim.</think>
+<think>The news title claims that a SWAT team responded to a 
+report of multiple people shot in Belfair, Washington, on February 
+26, 2016. The main news image shows a rural area with police 
+vehicles and personnel, consistent with a law enforcement response. 
+The evidence provided includes multiple credible sources (e.g., 
+Reuters, NDTV, The Himalayan Times) reporting on a murder-
+suicide incident in Belfair, Washington, where five people, 
+including the suspect, were found dead. ..There is no indication that 
+the claim has been manipulated, as the visual and textual evidence 
+corroborates the event described in the title.</think>
+<think>The main news image depicts a street scene with American 
+flags and skyscrapers, which is characteristic of New York City, 
+specifically near the Chrysler Building. This does not align with the 
+claim that the image represents Rittenhouse Square in Philadelphia, 
+which is known for its park-like setting and historical architecture. 
+The evidence images clearly show Rittenhouse Square as a park with 
+trees, benches, and open spaces, consistent with its reputation as a 
+cultural and historical landmark in Philadelphia. The mismatch 
+between the main image and the claim indicates 
+manipulation.</think>
+<think>The main news image shows Senator Ted Cruz walking in a 
+hallway, which does not align with the claim that he is speaking 
+during the 2016 Republican National Convention. The evidence 
+images depict him in settings that match the convention, such as 
+speaking at a podium with a patriotic backdrop. This discrepancy 
+suggests the claim is manipulated, as the main image does not 
+correspond to the event described in the title.</think>
+The image features Ted Cruz, a U.S. politician and senator, 
+speaking to a group of supporters. The background displays a 
+banner with the word “TED” in large letters, accompanied by the 
+words “COURAGEOUS,” “CONSERVATIVE,” and 
+“CONSISTENT,” which align with his campaign slogan. Cruz is 
+seen engaging with the crowd, holding a microphone in one hand 
+while raising his other hand in a gesture, likely to emphasize his 
+speech. 
+The image shows a cityscape with American flags hanging from 
+buildings, likely in an urban setting. While the title mentions 
+Rittenhouse Square in Philadelphia, the scene depicted in the image 
+seems to reflect a more general urban atmosphere, possibly a street in 
+a city with tall buildings and flags displayed. This could be 
+interpreted as a representation of a proud, vibrant urban area, likely in 
+a city known for its history and culture, as the title suggests.
+The image depicts a busy industrial scene with large ships and 
+towering refinery infrastructure in the background, resembling an oil 
+refinery or port area, which might be similar to the process of moving 
+an oil tanker. However, the image doesn't explicitly show the Fawley 
+Refinery in Southampton, nor does it confirm the presence of an oil 
+tanker. Instead, it focuses on a tugboat maneuvering a large vessel 
+near an industrial complex. Therefore, while the general activity and 
+setting suggest a port or refinery, the image does not perfectly align 
+with the specific location or description provided in the title.
+The image depicts law enforcement vehicles lined up on a forested 
+road, suggesting a tactical or investigative operation. However, the 
+scene does not explicitly show a SWAT team actively responding to a 
+reported shooting in Belfair, Washington, on February 26, 2016. 
+While the image suggests a law enforcement presence, it lacks the 
+specific context of a shooting or the direct involvement of SWAT 
+officers, making it inconsistent with the description provided.
+Figure 6: The explainable outputs of three models are as follows: Case 1 and Case 2 are real claims mistakenly classified as fake
+by GPT4o and SNIFFER, while Case 3 and Case 4 are fake claims mistakenly classified as real by GPT4o and SNIFFER.
+Query Claim Image
+Fake
+Evidence Image with the caption
+Image-Text Inference Score
+Inference Score
+Image-Image Inference Score
+Image-Text Inference Score
+Image-Image Inference Score
+0.991
+0.982
+0.995
+0.945
+0.998
+0.881
+0.721
+0.697
+0.655
+0.799
+0.608
+0.659
+Evidence1
+Evidence2
+Evidence3
+Evidence1
+Evidence2
+Evidence3
+'Doulton 
+Fountain, 
+Glasgow'
+The memorial is 
+next to the People's 
+Palace in Glasgow
+Nelson Monument, 
+Glasgow
+Real
+China Guangdong 
+Guangzhou Province City 
+Guangzhou Railway Station 
+High Resolution Stock 
+Photography and Images
+Massive  queues outside 
+Guangzhou railway station in 
+Guangzhou,  southern China’s 
+Guangdong province, on 
+February 2nd, 2016.
+Tens of thousands of 
+passengers were stranded 
+outside Guangzhou railway 
+station in Guangzhou.
+Evidence1
+Evidence2
+Evidence3
+Evidence1
+Evidence2
+Evidence3
+Figure 7: Visualization of the inference process of the Semantic-enhanced Retrieval Module. The evidence images, along with
+their captions, are arranged from top to bottom as Evidence 1, Evidence 2, and Evidence 3.
+A
+Pseudo Code of FACTCOMPASS
+In Algorithm 1, we summarize the training and inference processes
+of the Semantic-enhanced Retrieval Module. The training phase
+involves optimizing a Fact NCE contrastive loss using claim-image,
+evidence-image, and cross-image-text pairs. During inference, the
+model evaluates the similarity between claim images and candidate
+evidence images by considering both image and caption alignment,
+selecting the most relevant evidence based on semantic consistency.
+B
+More Experiments
+B.1
+Explainability Analysis
+We present four examples from the datasets in Figure 6 that were
+mistakenly classified by GPT4o and SNIFFER. Case 1 and Case 2
+are real claims mistakenly classified as fake, while Case 3 and Case
+4 are fake claims mistakenly classified as real. We observe that both
+SNIFFER and GPT-4o tend to forcefully output some entity inconsis-
+tencies. For instance, in Case 1, SNIFFER generates the hallucination,
+1850
+
+
+
+===== PAGE 11 =====
+Navigating Truth in Multimodal Fact-checking via Retrieval- and Reasoning-Enhanced Large Language Models
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates.
+You are a professional multimodal fact-checker. Your task is to assess the accuracy of a given 
+claim by analyzing both textual and visual evidence. You will be provided with the following three 
+inputs:
+1.Claim Text: A textual statement or description.
+2.Claim Image: An image associated with the claim text.
+3.Evidence : The description of the visual elements in the image, such as objects, people, or 
+landmarks, may contain errors.
+4.Explainability: A detailed explanation or interpretation that may provide context or clarification 
+regarding the claim text or image. The content is provided for reference only and may contain 
+inaccuracies.
+Your objective is to determine whether the claim is "real" or "fake" based on these inputs. 
+Consider the following when making your assessment:
+•Consistency: Does the claim text align with the content of the image? Are there any contradictions 
+between the two?
+•Relevance of Explainability: Does the explainability provide additional context or clarification 
+that helps confirm or disprove the claim?
+•Contextual Accuracy: Are there any factual inaccuracies in the claim text, image, or explanation?
+Use these guidelines to classify the claim as either "real" or "fake":
+•If the claim text and image show significant inconsistencies, and the explainability supports or 
+highlights this, the claim is "fake".
+•If the claim text and image are aligned and supported by the explainability, the claim is "real".
+Example:
+Claim Text: "Rittenhouse Square in Philadelphia, a city known for its history and culture."
+Claim Image: [image path]
+Evidence: "American flag, skyscrapers, streets”
+Explainability: "American flags hang between towering skyscrapers, framing the bustling 
+cityscape."
+Output: Fake
+Reasoning: The claim text suggests a historical and cultural location, but the image shows a modern, 
+skyscraper-filled cityscape, which contradicts the cultural and historical character of Rittenhouse 
+Square. This inconsistency, supported by the explanation, indicates that the claim is likely fake.
+Input Format:
+•Claim Text: [insert claim text here]
+•Claim Image: [insert image path here]
+•Evidence: [insert evidence image and evidence text here]
+•Explainability: [insert explainability here]
+Output Format:
+•"real" or "fake" (based on your judgment)
+Figure 8: The prompt we use to instruct GPT-4o to mimic
+human reviewers for a secondary verification process.
+You are an expert in multimodal fact-checking. Given the news title, news image, and optional 
+evidence, determine if the claim is manipulated.
+News Title: {caption}
+Instructions:
+- Analyze the first news image <image>.
+- The next images are evidence <image><image><image>.
+- Use the text-based evidence below to reason (they may contain errors, use judgment).
+Evidence Text:
+{evidence_block}
+Respond in the following format:
+<think>Reasoning goes here</think><answer>Yes. or No.</answer>
+Example:
+Claim Text: "Saudi troops cheer as they ride at the back of an army truck in the southwestern 
+province of Jizan near the border with Yemen."
+Claim Image: [image path]
+Evidence Image: [image path1], [image path2], [image path3]
+Evidence Text : "Israel : country in Western Asia | Prime minister : most senior minister of cabinet 
+in the executive branch of government in a parliamentary system and ..."
+Output: <think>The main news image shows soldiers wearing helmets and military gear, which is 
+inconsistent with the description of Saudi troops in Jizan. The helmets and gear resemble those used 
+by Israeli soldiers, as seen in the context of the Israeli-Palestinian conflict. The evidence images 
+depict soldiers in different uniforms and vehicles, more consistent with Saudi military. The text 
+evidence discusses unrelated geopolitical issues, primarily focusing on Israel and Palestine, which 
+further suggests the main image is not related to Saudi troops. The ground truth label \"Yes\" 
+indicates the claim is manipulated, supporting the conclusion that the image does not depict Saudi 
+troops in Jizan.</think><answer>Yes.</answer>
+Figure 9: The prompt we use to instruct GPT-4o to generate
+reasoning data during Cold Start Training.
+Algorithm 1: Semantic-enhanced Retrieval Module: Train-
+ing and Inference
+Input: Mini-batch of 𝑁samples. Each sample includes
+claim image-text pairs (𝑣c
+𝑖,𝑡c
+𝑖), evidence image-text
+pairs (𝑣e
+𝑖,𝑡e
+𝑖), and cross-image-text pairs (𝑣c
+𝑖,𝑡e
+𝑖),
+(𝑣e
+𝑖,𝑡c
+𝑖).
+Output: Optimized retrieval model.
+// Training phase
+for each sample in the mini-batch do
+Compute image-to-text NCE loss Li2t // as defined
+in Eq. (1);
+Define positive pair set:
+M𝑖= {(𝑣c
+𝑖,𝑡c
+𝑖), (𝑣e
+𝑖,𝑡e
+𝑖), (𝑣c
+𝑖,𝑡e
+𝑖), (𝑣e
+𝑖,𝑡c
+𝑖)};
+Compute text-to-image NCE loss Lt2i // as defined
+in Eq. (2);
+Compute total loss Ltotal = Li2t + Lt2i;
+Update model parameters to minimize Ltotal;
+end
+// Inference phase
+for each claim image 𝑣c and candidate evidence image 𝑣e do
+Encode 𝑣c, 𝑣e, and evidence caption 𝑡e;
+Compute image–caption similarity scores // as
+defined in Eq. (3);
+Select top-ranked evidence images based on similarity;
+end
+return Optimized model for evidence image matching in the
+news domain.;
+‘oil tanker being moved into position, while the image shows a tug-
+boat assisting with the maneuvering.’ Such hallucinations in the
+explainable outputs can mislead human fact-checkers. In contrast,
+FACTCOMPASS delivers accurate and logically structured reason-
+ing chains, empowering the model to generate interpretable and
+domain-aware fact-checking results beyond surface-level matching.
+We illustrate two tailored prompts used to instruct GPT-4o in
+Figure 8 and Figure 9. Specifically, the prompt in Figure 8 is designed
+to simulate human reviewer behavior for secondary verification,
+enabling GPT-4o to assess claim-image pairs from a fact-checking
+perspective. Meanwhile, the prompt in Figure 9 is crafted to elicit
+high-quality reasoning traces during the Cold Start Training Stage.
+B.2
+Qualitative Evaluation
+Figure 7 illustrates the inference matching process of the Semantic-
+enhanced Retrieval Module, presenting the top three evidence
+image-caption pairs with the highest composite scores. For fake
+claims, both the Image-Text and Image-Image Inference Scores are
+relatively low and uniformly distributed, leading the retrieval pro-
+cess to select semantically similar but irrelevant pairs (e.g., “China
+Guangdong Guangzhou Province City”). In contrast, for pristine
+claims, the module successfully identifies evidence images that
+are semantically consistent with both the claim image and text
+(e.g., “Nelson Monument, Glasgow”). These results demonstrate
+that, through contrastive learning and multimodal training, the
+Semantic-enhanced Retrieval Module effectively captures seman-
+tic coherence across modalities, enabling accurate and meaningful
+evidence matching.
+1851

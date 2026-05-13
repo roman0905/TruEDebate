@@ -346,6 +346,8 @@ class DebateGraphDataset(TorchDataset):
             news_attention_mask=news_encoding["attention_mask"],
             y=torch.tensor(label, dtype=torch.long),
             num_nodes=len(nodes),
+            # V8 KDPE：把样本在 file_paths 里的索引带上，便于 train 时取 teacher probs。
+            sample_idx=torch.tensor([idx], dtype=torch.long),
         )
         return data
 

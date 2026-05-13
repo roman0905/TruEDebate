@@ -1,0 +1,2508 @@
+
+
+===== PAGE 1 =====
+Veri-R1: Toward Precise and Faithful Claim Verification via Online
+Reinforcement Learning
+Qi He1,2, Cheng Qian1, Xiusi Chen1, Bingxiang He3, Yi R. (May) Fung1,4, Heng Ji1
+1 University of Illinois Urbana-Champaign, 2 Fudan University
+3 Tsinghua University, 4 Hong Kong University of Science and Technology
+qhe22@m.fudan.edu.cn, {xiusic,hengji}@illinois.edu
+Abstract
+Claim verification with large language mod-
+els (LLMs) has recently attracted growing at-
+tention, due to their strong reasoning capa-
+bilities and transparent verification processes
+compared to traditional answer-only judgments.
+However, existing approaches to online claim
+verification, which requires iterative evidence
+retrieval and reasoning, still mainly rely on
+prompt engineering or pre-designed reason-
+ing workflows, without unified training to im-
+prove necessary skills. Therefore, we introduce
+Veri-R1, an online reinforcement learning (RL)
+framework that enables an LLM to interact with
+a search engine and to receive reward signals
+that explicitly shape its planning, retrieval, and
+reasoning behaviors. This dynamic interaction
+of LLM with retrieval systems more accurately
+reflects real-world verification scenarios and
+fosters comprehensive verification skills. Em-
+pirical results show that Veri-R1 improves joint
+accuracy by up to 30% and doubles the evi-
+dence score, often surpassing its larger-scale
+model counterparts. Ablation studies further
+reveal the impact of reward components, and
+the link between output logits and label accu-
+racy. Our results highlight the effectiveness of
+online RL for precise and faithful claim verifi-
+cation, providing an important foundation for
+future research. We release our code to support
+community progress in LLM empowered claim
+verification.1
+1
+Introduction
+Claim verification with LLMs has emerged as an
+increasingly important and complex challenge in
+natural language processing. With the society pro-
+ducing an enormous number of claims on the in-
+ternet and increasing LLM generated contents, the
+proliferation of unverified claims on the web has
+accelerated at an unprecedented rate. Manual veri-
+fication by humans is no longer a feasible solution
+1The code, models and datasets are available at https:
+//github.com/H0key-22/Veri-R1.
+Figure 1: Conceptual comparison of Offline Claim Ver-
+ification and Online Claim Verification. In the offline
+setting, models are provided with both the claim and
+relevant evidence, requiring only reasoning to produce
+the final answer. In the online setting, models must
+iteratively retrieve relevant information from a corpus
+before reasoning and producing the final answer
+given the overwhelming volume of information.
+Consequently, automatic and effective approaches
+to claim verification are becoming a more urgent
+need (Dmonte et al., 2024).
+Previous studies (Weng et al., 2022; Li et al.,
+2023) have primarily focused on enhancing a
+model’s verification capability by providing both
+claims and corresponding evidence. This setting,
+referred to as Offline Claim Verification (OFFCV),
+as illustrated in Figure 1, requires the model to
+verify a given claim based solely on the provided
+evidence. However, in real-world scenarios, claim
+verification often lacks direct and concrete support-
+ing evidence. Instead, the model must actively
+retrieve relevant information to assess the claim’s
+validity. We define this process as Online Claim
+Verification (ONCV), where the model is given
+only the claim and access to a trusted corpus. The
+model is asked to actively acquire and utilize rele-
+vant evidence to perform verification, as shown in
+Figure 1. In this work, we focus on the more realis-
+tic ONCV setting and evaluate model performance
+in this context.
+1
+arXiv:2510.01932v2  [cs.CL]  4 Oct 2025
+
+
+
+===== PAGE 2 =====
+Online claim verification poses additional great
+challenges to the LLMs since it demands all-around
+capabilities, which combine information retrieval,
+reasoning, and judgment.
+Similar to a sophis-
+ticated human claim verifier, the LLM must it-
+eratively reason over retrieved content and inter-
+act with a search engine across multiple turns be-
+fore producing a final judgment. Traditional ap-
+proaches (Hanselowski et al., 2018; Zhang et al.,
+2023; Pan et al., 2021) often adopt attribute-
+oriented methods (Reddy et al., 2021, 2022; Li
+et al., 2022) to analyze claims, followed by a ver-
+ifier that outputs the final decision without ex-
+planation (Soleimani et al., 2020). While LLMs
+have made the verification process more transpar-
+ent (Lee et al., 2020; Guan et al., 2023), they
+still exhibit notable limitations in handling the full
+ONCV pipeline. Recent work (Trinh et al., 2025;
+Kim et al., 2024) has attempted to improve LLM
+performance on specific claim datasets by provid-
+ing structured reasoning paths or introducing tai-
+lored analytical methods. However, these methods
+are typically specific to certain domains and chal-
+lenges, whereas claim verification spans a wide
+range of domains (Augenstein et al., 2019; Wang
+et al., 2024) and encompasses diverse challenges
+such as multi-hop reasoning, entity disambigua-
+tion, numerical reasoning and more. Consequently,
+improving model performance in a more general
+claim verification setting requires addressing a cen-
+tral question:
+How can we comprehensively enhance a model’s
+ability to search, reason, and judge across varied
+claim verification scenarios and challenges?
+In this work, we propose Veri-R1, a novel train-
+ing framework designed to enhance the online
+claim verification capability of LLMs within a uni-
+fied pipeline. Unlike common approaches such
+as supervised fine-tuning (SFT) (Zheng and Lee,
+2025), we adopt a reinforcement learning (RL)
+paradigm, as it has demonstrated superior gen-
+eralization ability in numerous prior studies and
+does not require explicit reasoning trajectories for
+training. Moreover, we employ online RL as our
+primary methodology due to its previous empir-
+ical success (Wang et al., 2025b) and its closer
+correspondence to real-world settings in which ev-
+idence should be retrieved and identified. Dur-
+ing training rollouts, LLMs are required to itera-
+tively search and reason across multiple turns be-
+fore producing final answers. Since high-quality
+data is essential for effective training, and mis-
+labeled samples can hinder the learning process,
+we filter and select samples from two high-quality
+datasets—FEVEROUS (Aly et al., 2021) and EX-
+FEVER (Ma et al., 2023)—covering a wide range
+of claim verification challenges. To guide the train-
+ing process, we design a task-specific reward func-
+tion tailored to claim verification. Leveraging the
+ground-truth labels, the reward encourages mod-
+els to learn robust judgment skills, while golden
+evidence is incorporated to ensure that models re-
+trieve and identify evidence both completely and
+precisely. Furthermore, we conduct comprehensive
+comparisons among different training paradigms,
+including SFT and RL in both online and offline
+settings, and perform an ablation study to analyze
+the contribution of each reward component.
+Empirically, online RL model from our Veri-R1
+pipeline yielded the best performance in most cases
+compared to other training methods, yielding up
+to a 30% absolute gain in joint accuracy, a 23%
+improvement in verification accuracy, and a 22%
+improvement in label accuracy on evaluation data.
+It also enhanced the evidence-scoring metric by
+up to 150%. Our ablation study shows that the
+evidence reward effectively improves the model’s
+ability to identify gold evidence, while the validity
+weight maintains training consistency by prevent-
+ing reward hacking and encouraging correct label
+prediction with sufficient supporting evidence. Fi-
+nally, we probe the relationship between model
+confidence and prediction correctness, finding that
+low confidence consistently correlates with low ac-
+curacy for SUPPORT/REFUTE labels. Moreover,
+larger models tend to avoid answering with NOT
+ENOUGH INFO, as they are more confident in
+their predictions.
+In summary, our core contributions are as fol-
+lows:
+• Veri-R1 framework: We propose a unified RL-
+based pipeline tailored for Online Claim Verifi-
+cation. By contrasting Online RL and Offline
+RL against SFT, we highlight how interactive,
+feedback-driven learning better captures the dy-
+namics of real-world verification tasks.
+• Data & Reward Design:
+We construct a
+high-quality dataset from FEVEROUS and EX-
+FEVER and design a robust reward system that
+jointly emphasizes multi-level accuracy and pre-
+cise evidence retrieval and identification. This
+alignment of supervision with verification ob-
+jectives ensures that models learn to reason in
+2
+
+
+
+===== PAGE 3 =====
+ways directly tied to label and evidence precision,
+while maintaining faithful reasoning trajectories.
+• Confidence–Accuracy Analysis: We conduct a
+detailed investigation of model confidence, show-
+ing that low-confidence predictions frequently
+correspond to errors in both SUPPORT and RE-
+FUTE cases.
+Moreover, we find that larger
+models tend to exhibit overconfidence, favor-
+ing definitive judgments while underutilizing the
+NOT ENOUGH INFO category. These results
+highlight an alternative avenue for supervising
+model outputs, while also underscoring that the
+overconfidence of larger-scale models constitutes
+a potential drawback.
+2
+Related Work
+2.1
+LLM Empowered Claim Verification
+Early investigations have primarily focused on of-
+fline claim verification, leveraging LLMs as the
+main reasoner and verifier.
+For example, pio-
+neering work (Buchholz, 2023) demonstrated that
+LLMs can assess and validate factual assertions
+with promising accuracy.
+To further improve
+claim verification performance, several studies (Pis-
+arevskaya and Zubiaga, 2025; Gong et al., 2025)
+have introduced structured reasoning prompts(Wei
+et al., 2022), guiding LLMs to decompose claims
+into sequences of analytic steps (Vladika et al.,
+2025; Hu et al., 2024), thereby enhancing trans-
+parency and fostering trust in their judgments.
+Other research has explored analytical tool integra-
+tion, such as incorporating entity graphs to enforce
+systematic reasoning trajectories (Jeon and Lee,
+2025; Huang et al., 2025b).
+More recent work has shifted toward online
+claim verification, where evidence must be re-
+trieved by the model. Retrieval-augmented frame-
+works (Vykopal et al., 2025; Hagström et al.,
+2024) enable models to query external knowledge
+bases and rapidly incorporate emerging informa-
+tion. Given the additional challenges in the on-
+line setting, researchers have proposed new ap-
+proaches—such as multi-agent systems(Hu et al.,
+2025b) and program-guided reasoning(Pan et al.,
+2023; Hu et al., 2025a)—to help models adapt to
+diverse verification tasks.
+Nevertheless, improving model performance for
+online claim verification across diverse challenges
+and domains remains an open problem. In this
+work, we introduce a framework designed to com-
+prehensively enhance model verification capabili-
+ties in this complex setting.
+2.2
+Online Reinforcement Learning
+Reinforcement learning (RL) (Kaelbling et al.,
+1996) has long been recognized as a promising
+paradigm for enabling agents to interact with their
+environment and learn from feedback (Watkins and
+Dayan, 1992; Rummery and Niranjan, 1994). Re-
+cently, RL techniques have emerged as a powerful
+mechanism for enhancing the inferential capabil-
+ities of large language models (LLMs) across a
+wide range of tasks, including mathematical prob-
+lem solving (Shao et al., 2024; Huang et al., 2025a),
+medical diagnosis (Lai et al., 2025), role-playing
+(Mou et al., 2024), and dialogue generation (Chen
+et al., 2025).
+As the complexity of interactions between LLMs
+and their counterparts—such as users or external
+tools—increases (Feng et al., 2025), there is a grow-
+ing need for online RL training frameworks that
+support multi-turn interactions. Jin et al. (2025)
+proposed an RL framework enabling models to
+interactively search for information, demonstrat-
+ing the effectiveness of online RL training. Subse-
+quently, several studies (Mei et al., 2025; Xue et al.,
+2025) have sought to adapt the online RL pipeline
+to diverse application scenarios and improve train-
+ing efficiency, for instance by refining rewards at
+each interaction turn (Wang et al., 2025c; Zeng
+et al., 2025).
+However, the effectiveness of online RL remains
+largely unexplored in the context of claim verifi-
+cation, and no prior work has systematically com-
+pared online RL with offline RL (Levine et al.,
+2020).
+In this work, we implement both RL
+paradigms for claim verification and conduct an
+extensive comparison to evaluate their respective
+advantages and limitations.
+3
+Method
+In the claim verification task, a model must not
+only determine the veracity of a claim but also pro-
+vide evidences. Although supervised fine-tuning
+has been shown to enhance label prediction accu-
+racy (Zheng and Lee, 2025), it typically requires
+high-quality reasoning trajectories and often falls
+short in terms of robustness and adaptability, partic-
+ularly in complex or domain-specific settings. Rein-
+forcement learning (RL) has demonstrated substan-
+tial promise in optimizing model behavior across a
+wide range of tasks and scenarios. Empirical evi-
+3
+
+
+
+===== PAGE 4 =====
+Figure 2: Comprehensive framework of Veri-R1, depicting the Online Claim Verification (ONCV) and Offline
+Claim Verification (OFFCV) workflows together with the calculation of label, evidence, and format rewards.
+dence (Qian et al., 2025) indicates that RL training
+can even surpass prevailing supervised fine-tuning
+in terms of robustness and adaptability. Inspired by
+the power of RL training, we construct the Veri-R1
+training pipeline, built primarily on Online RL. Cru-
+cially, we devise a carefully calibrated reward func-
+tion tailored to the claim-verification task, which
+ensures that the model improves in both label accu-
+racy and evidence accuracy.
+3.1
+Task Definition
+Online Claim Verification (ONCV) denotes an
+end-to-end process in which a LLM autonomously
+leverages external search engines to gather evi-
+dence, performs intermediate reasoning steps, and
+produces a final veracity label. A typical verifica-
+tion trajectory comprises an initial planning stage,
+multiple search–reasoning iterations, and a con-
+cluding judgment accompanied by selected evi-
+dence. Concretely, given a claim c, the model first
+generates a verification plan p. At each iteration
+i ∈{1, . . . , k}, it issues a search action si with
+query qi, retrieves information ii from the corpus,
+and executes an internal reasoning step ti. Finally,
+the model produces an answer a, as detailed in
+Section 3.2. We denote the full trajectory as
+T =
+ p, (s1, i1, t1), (s2, i2, t2), . . . , (sk, ik, tk), a
+
+.
+Under this framework, we optimize the model’s
+policy πθ by maximizing the expected reward
+max
+θ
+ET∼πθ
+
+R(a)
+
+where R(a), described in Section 3.3, is a scalar
+feedback signal computed from the final answer. In
+practice, we adopt Group Relative Policy Optimiza-
+tion (GRPO) (Shao et al., 2024), where rewards
+are normalized within each group before policy
+updates. The GRPO objective can be formulated as
+L(θ) = E
+h
+min
+ r(a) ˆRgrp(a), clip(r(a), 1 −ϵ, 1 + ϵ) ˆRgrp(a)
+i
+,
+where
+r(a) = πθ(a | s)
+πθold(a | s),
+ˆRgrp(a) = R(a) −µg
+σg + ϵ
+,
+with µg, σg denoting the mean and standard devia-
+tion of rewards within the group, respectively.
+3.2
+Rollout Settings
+Offline Rollout
+Offline rollout refers to the pro-
+cess in which, given an initial prompt containing a
+target claim, supporting or refuting evidence, and
+contextual sentences, a model internally reasons
+based on these inputs—without any further interac-
+tion—and then generates its final verdict.
+Online Rollout
+By contrast, online rollout man-
+dates adherence to the specified algorithmic trajec-
+tory: the model may issue up to k search turns,
+interleaving retrieval and reasoning to support or
+refute the claim.
+Token Delimiters
+To enforce procedural rigor
+and faclitate answer parsing, each component of the
+workflow must be delimited by designated tokens:
+<plan>. . . </plan>: Strategic planning
+4
+
+
+
+===== PAGE 5 =====
+<search>. . . </search>: Retrieval queries
+<think>. . . </think>: Reasoning Process
+<answer>. . . </answer>: Final judgment
+Answer Format
+The model’s output must con-
+sist solely of two elements within the pre-defined
+tag:
+<answer>
+Label: one of SUPPORT, REFUTE, or NOT ENOUGH
+INFO
+Evidence: a list of evidence id formatted as
+[[evid_id1], [evid_id2]], . . .
+</answer>
+We adopt a strict answer format to simplify pars-
+ing, using [[]] to delimit each evidence ID and
+guarantee accurate extraction.
+3.3
+Reward Design
+Rule-oriented reward strategies have demonstrated
+strong efficacy across a wide range of experiments
+and gain broad support (Icarte et al., 2022; Li et al.,
+2025; Wang et al., 2025a). Because an effective
+policy often needs to balance multiple objectives,
+many studies combine several sub-reward functions
+using a linear weighted sum. In our framework, we
+define two primary components—label reward
+and evidence reward—to more directly steer the
+verification process. Additionally, we incorporate
+a format reward to enforce conformity to the de-
+sired output schema and to mitigate generation er-
+rors during reasoning. Finally, we introduce a valid-
+ity weight to further steer and stabilize the training
+process.
+Format Reward
+We enforce format compliance
+according to the following principles: (1) Tag
+adherence: all actions must strictly follow the
+prompt and be emitted within the prescribed tags;
+(2) No extraneous tags: the model must not
+introduce <information>. . . </information>
+(or any other undeclared tags) on its own. Invalid
+<information> tags are detected based on whether
+they immediately follow a <search> tag, since the
+system automatically identifies <search> tags and
+appends the corresponding <information> tags.
+Finally, if the verification transcript conforms to all
+of these rules, it is awarded a format reward of 1;
+otherwise, it receives 0:
+Rformat =
+(
+1,
+if all format rules are satisfied,
+0,
+otherwise.
+Evidence Reward
+Evidence is essential for val-
+idating a model’s prediction and guarding against
+correct guesses made by chance. Accordingly, we
+define the evidence reward as the ratio of the inter-
+section to the union between the predicted evidence
+set and the gold-standard evidence set. This reward
+is maximized only when the model retrieves all
+true evidence while avoiding irrelevant selections.
+Revidence =
+Epred ∩Egold
+
+Epred ∪Egold
+,
+Revidence ∈[0, 1].
+Epred denotes the set of evidence items selected
+by the model, and Egold denotes the set of ground-
+truth evidence items.
+Label Reward
+In claim verification, the la-
+bel space is limited to SUPPORT, REFUTE or NOT
+ENOUGH INFO. Because label accuracy is the most
+critical metric for developing reliable verification
+models, we amplify the base label reward by giving
+it higher value, thereby boosting its relative weight
+in the overall reward function.
+Rlabel =
+(
+2,
+ˆy = y,
+0,
+otherwise,
+ˆy is the model’s predicted label and y is the ground-
+truth label.
+Validity Weight
+There are cases in which a
+model arrives at the correct label via an unsound
+or “shortcut” reasoning path—for instance, predict-
+ing SUPPORT after verifying only a single subclaim.
+Such behavior undermines the model’s capacity
+for genuine scrutiny and may even lead it astray.
+To guard against this, we introduce a validity con-
+straint on the label reward. We define the hit rate
+as
+h = |Epred ∩Egold|
+|Egold|
+.
+A policy can earn the full label reward (wvalidity =
+1) for a SUPPORT or REFUTE decision only if it “hits”
+all of the gold evidence. To mitigate sparsity, we
+grant a half reward (wvalidity = 0.5) whenever
+the hit rate exceeds 50%. We set the threshold
+at 50% since it is the natural midpoint of the evi-
+dence hit rate: retrieving more than half of the gold
+evidence indicates that the model has captured the
+majority of the reasoning path. For NOT ENOUGH
+INFORMATION (NEI) labels, however, we apply no
+validity weighting, since NEI cases often lack ex-
+plicit evidence or involve only partially relevant
+facts.
+5
+
+
+
+===== PAGE 6 =====
+wvalidity =
+
+
+
+
+
+
+
+
+
+1,
+y = N ∨
+ y ∈{S, R} ∧h = 1
+
+,
+0.5,
+y ∈{S, R} ∧h > 0.5,
+0,
+otherwise.
+N, S, and R abbreviate NEI, SUPPORT, and REFUTE,
+respectively.
+Final Reward
+The reward components are sub-
+sequently integrated to formulate the final reward
+for optimization:
+Rfinal = Rlabel · wvalidity + Revidence + Rformat
+4
+Experiment
+4.1
+Dataset
+To comprehensively train and evaluate the base
+model, we assembled a claim-verification corpus
+encompassing diverse challenges to ensure robust,
+generalizable performance. Recognizing the cru-
+cial role of data quality, we also implemented a
+filtering pipeline to retain only high-quality exam-
+ples. Details of dataset are described in appendix C
+Training Dataset
+FEVEROUS
+(Aly et al., 2021) is a comprehen-
+sive verification dataset presenting diverse chal-
+lenges—such as entity disambiguation, numerical
+reasoning, and more.
+EX-FEVER
+(Ma et al., 2023) is designed to
+evaluate the explainability of the verification pro-
+cess, comprising thousands of multi-hop claims.
+Hold-Out Dataset
+FEVER
+(Thorne et al., 2018) is a canonical
+claim-verification benchmark composed largely of
+concise, single-sentence claims.
+HOVER
+(Jiang et al., 2020) defines a more chal-
+lenging multi-hop verification task, demanding rea-
+soning across 2 to 4 hops over Wikipedia entities.
+SciFACT
+(Wadden et al., 2020) is a scientific-
+domain fact-checking corpus containing expert-
+annotated claims from research papers.
+Data Filtering
+Given the ambiguous nature of claims, there are
+often some ambiguity for a claim. We also find
+some toxic sample in the dataset may disturb a
+smooth training process. Considering the training
+effectiveness and evaluation credibility, we decided
+Figure 3: To mitigate annotation-related issues and am-
+biguities in the raw dataset, we developed a pipeline
+that simulates offline rollout, using GPT-4o to filter and
+preserve only high-quality data.
+to filter the dataset with assistance of GPT-4o. We
+simulate the process of offline rollout shown in
+Figure 3, where we provide the model with claims
+and sufficient information. As is depicted in the
+figure, we only select the sample where GPT-4o
+is totally correct, which means it predicts the right
+label and evidence with no deviation. In general,
+approximately 70% of the samples are retained
+during the filtering process.
+4.2
+Experiment Setting
+Training
+Our online claim verification sys-
+tem builds upon Verl (Sheng et al., 2025) and
+Search-R1 (Jin et al., 2025). During RL training,
+we employ the GRPO algorithm to preferentially
+learn from high-quality trajectories. We cap the
+number of search turns at three and require the
+model to produce its answer once this budget is
+exhausted.
+Evaluation
+We evaluate our approach across
+five datasets: the FEVEROUS and EX-FEVER
+test sets, as well as selected subsets of FEVER,
+HOVER, and SCIFACT. Within each dataset, the
+class labels are uniformly distributed to elimi-
+nate potential biases arising from class imbalance.
+In addition to the evidence score (as described in
+our methodology), we report three distinct accuracy
+metrics:
+• Joint Accuracy (Joint Acc): the proportion of
+instances in which both the predicted label and
+the retrieved evidence are correct.
+• Verification Accuracy (Veri Acc): the propor-
+tion of instances in which the model predicts
+the correct label and retrieves all gold-standard
+evidence (allowing redundant evidence).
+6
+
+
+
+===== PAGE 7 =====
+Claim Verification Assistant Prompt
+You are a claim-verification assistant. You MUST follow this protocol exactly:
+<plan>. . . </plan>
+– Once at the start: sketch your high-level strategy, such as claim decomposition, entity recognition,
+etc.
+<search>. . . </search>
+– When you need a fact: emit exactly this tag with your query.
+– To make the most of your search turns, don’t repeat identical queries.
+– You can search at most three times.
+<information>
+[[e_1]]: info1
+[[e_2]]: info2
+. . .
+</information>
+– You will be given claim related information in the format above.
+<think>. . . </think>
+– Use for every piece of reasoning; do not state your final verdict here.
+– You must conduct reasoning inside <think> and </think> first every time you get new informa-
+tion.
+<answer>
+Label: SUPPORT / REFUTE / NOT ENOUGH INFO
+Evidence: [[e_1]], [[e_3]], . . .
+</answer>
+– Emit exactly once at the end, no extra text or tags.
+– Evidence ids such as e_1 will be replaced by real ids from the corpus. Include only those ids in
+your evidence list.
+- Evidence outputs must strictly enforce the format [[e_i]], [[e_j]]...
+- Answer Labels respectively stand for:
+SUPPORT: The claim is consistent with the cited evidence and the evidence is sufficient to confirm
+the claim.
+REFUTE: The claim contradicts the cited evidence and the evidence is sufficient to disprove the
+claim.
+NOT ENOUGH INFO: The available evidence is insufficient to determine whether the claim is
+true or false.
+– Process: plan →(search →information →think) repeat until conclusion →answer
+Verify the claim: {claim}
+Figure 4: System Prompt for Online Claim Verification.
+• Label Accuracy (Label Acc): the proportion
+of instances in which the predicted class label is
+correct.
+All evaluations are conducted in an online setting,
+where the model retrieves the necessary informa-
+tion from the corpus using queries. For instances
+classified as NOT ENOUGH INFO (NEI), we relax
+the requirement of retrieving all evidence items,
+since such cases often lack sufficient evidence or
+contain inherently subjective evidence annotations.
+4.3
+Baseline
+To evaluate the effectiveness of online RL training,
+we compare our approach against the following
+baselines:
+1. Raw Instruct Model: the original instruction-
+tuned model without any additional train-
+ing.
+For baselines, we adopt the widely
+used Qwen2.5-3B-Instruct (Team, 2024) and
+Llama3.2-3B-Instruct models (Dubey et al.,
+2024).
+2. SFT Model: the instruct model supervised fine-
+tuned(SFT) on simulated reasoning paths gen-
+erated by GPT-4o for samples in the training
+set. We prompt GPT-4o using the template in
+Figure 4 to guide it in producing high-quality
+verification reasoning for each claim. We per-
+form LoRA adaptation (Hu et al., 2022) using
+the llama-factory toolkit (Zheng et al., 2024).
+7
+
+
+
+===== PAGE 8 =====
+Model
+FEVEROUS
+EX-FEVER
+FEVER
+SciFACT
+HOVER
+Joint Acc
+Veri Acc
+Label Acc
+Joint Acc
+Veri Acc
+Label Acc
+Joint Acc
+Veri Acc
+Label Acc
+Joint Acc
+Veri Acc
+Label Acc
+Joint Acc
+Veri Acc
+Label Acc
+GPT-4o
+26.64%
+40.70%
+64.96%
+24.71%
+26.48%
+54.75%
+41.11%
+60.44%
+74.33%
+38.26%
+54.43%
+74.96%
+59.30%
+61.90%
+73.60%
+Qwen2.5-3B-Instruct
+16.89%
+24.15%
+49.55%
+17.62%
+19.90%
+42.71%
+19.00%
+47.22%
+62.78%
+22.78%
+37.27%
+54.43%
+46.30%
+50.50%
+62.30%
+Qwen2.5-3B-Instruct-SFT
+16.33%
+23.81%
+47.39%
+17.62%
+20.28%
+42.71%
+19.89%
+47.56%
+62.00%
+23.77%
+36.85%
+55.56%
+44.30%
+49.10%
+60.90%
+Qwen2.5-3B-Instruct-OfflineRL
+19.16%
+27.89%
+53.40%
+18.00%
+20.41%
+50.19%
+30.11%
+51.22%
+67.22%
+28.41%
+39.94%
+65.12%
+45.80%
+51.00%
+61.50%
+Qwen2.5-7B-Instruct
+14.17%
+25.51%
+53.97%
+14.96%
+17.62%
+46.39%
+26.00%
+49.78%
+66.11%
+24.33%
+36.01%
+65.96%
+53.60%
+57.10%
+65.70%
+Qwen2.5-3B-Instruct-OnlineRL
+28.91%
+36.28%
+61.22%
+31.69%
+32.45%
+61.09%
+49.11%
+55.89%
+69.56%
+38.82%
+43.18%
+63.43%
+53.70%
+55.10%
+63.70%
+Llama3.2-3B-Instruct
+13.27%
+19.27%
+41.38%
+17.24%
+20.15%
+37.26%
+13.11%
+37.67%
+53.78%
+14.35%
+24.75%
+47.54%
+31.70%
+36.30%
+56.00%
+Llama3.2-3B-Instruct-SFT
+12.24%
+18.48%
+43.65%
+15.08%
+18.76%
+37.39%
+16.00%
+41.67%
+56.00%
+15.61%
+26.44%
+50.49%
+32.50%
+38.40%
+57.40%
+Llama3.2-3B-Instruct-OfflineRL
+16.10%
+21.88%
+44.10%
+17.49%
+20.79%
+41.83%
+17.89%
+37.78%
+57.67%
+18.85%
+24.61%
+51.76%
+35.90%
+40.60%
+57.20%
+Llama3.1-8B-Instruct
+19.73%
+27.32%
+50.91%
+24.08%
+26.87%
+52.34%
+23.56%
+53.33%
+67.44%
+16.32%
+32.63%
+58.93%
+51.50%
+55.60%
+67.70%
+Llama3.2-3B-Instruct-OnlineRL
+19.27%
+26.30%
+53.17%
+28.52%
+30.29%
+59.32%
+40.11%
+53.11%
+68.44%
+31.65%
+44.30%
+66.53%
+52.60%
+54.90%
+65.40%
+Table 1: Unified performance comparison across FEVEROUS, EX-FEVER, FEVER, SciFACT, and HOVER datasets.
+Bold numbers denote the best performance within each group (Qwen and Llama), and underlined numbers denote
+the second-best performance.
+Model
+FEVEROUS (Joint Acc)
+EX-FEVER (Joint Acc)
+FEVER (Joint Acc)
+SciFACT (Joint Acc)
+HOVER (Joint Acc)
+SUPPORTS
+REFUTES
+NEI
+SUPPORT
+REFUTE
+NEI
+SUPPORTS
+REFUTES
+NEI
+SUPPORT
+CONTRADICT
+NEI
+SUPPORTED
+NOT SUPPORTED
+GPT-4o
+32.65%
+4.08%
+43.19%
+16.73%
+13.31%
+44.11%
+44.00%
+38.00%
+41.33%
+16.46%
+18.99%
+79.32%
+50.60%
+68.00%
+Qwen2.5-3B-Instruct
+10.20%
+0.00%
+40.48%
+6.46%
+4.56%
+41.83%
+5.00%
+1.67%
+50.33%
+2.11%
+2.53%
+63.71%
+27.00%
+65.60%
+Qwen2.5-3B-Instruct-SFT
+7.82%
+0.34%
+40.82%
+8.75%
+3.80%
+40.30%
+7.00%
+3.00%
+49.67%
+1.27%
+2.11%
+67.93%
+24.00%
+64.60%
+Qwen2.5-3B-Instruct-OfflineRL
+19.73%
+4.08%
+33.67%
+7.98%
+5.32%
+40.68%
+25.67%
+21.00%
+43.67%
+5.91%
+10.13%
+69.20%
+28.80%
+62.80%
+Qwen2.5-7B-Instruct
+16.33%
+2.72%
+23.47%
+11.03%
+6.84%
+27.00%
+30.67%
+23.33%
+24.00%
+8.86%
+10.13%
+54.01%
+34.00%
+73.20%
+Qwen2.5-3B-Instruct-OnlineRL
+30.27%
+11.22%
+45.24%
+17.49%
+10.65%
+66.92%
+45.67%
+46.67%
+55.00%
+11.39%
+14.77%
+90.30%
+42.00%
+65.40%
+Llama3.2-3B-Instruct
+3.74%
+0.00%
+36.05%
+7.22%
+1.90%
+42.59%
+3.67%
+3.33%
+32.33%
+0.42%
+0.42%
+42.19%
+17.40%
+46.00%
+Llama3.2-3B-Instruct-SFT
+5.10%
+0.68%
+30.95%
+7.60%
+1.90%
+35.74%
+4.33%
+4.67%
+39.00%
+0.42%
+0.42%
+45.99%
+17.80%
+47.20%
+Llama3.2-3B-Instruct-OfflineRL
+11.22%
+2.04%
+35.03%
+8.75%
+9.13%
+34.60%
+13.33%
+13.33%
+27.00%
+1.27%
+1.27%
+54.01%
+21.40%
+50.40%
+Llama3.1-8B-Instruct
+16.67%
+3.40%
+39.12%
+15.97%
+6.84%
+49.43%
+23.00%
+14.00%
+33.67%
+3.80%
+2.11%
+43.04%
+42.60%
+60.40%
+Llama3.2-3B-Instruct-OnlineRL
+21.77%
+4.08%
+31.97%
+20.91%
+12.55%
+52.09%
+41.33%
+44.33%
+34.67%
+8.02%
+12.66%
+74.26%
+43.80%
+61.40%
+Table 2: Evaluation of Joint Accuracy across five datasets. Within each model group, bold denotes the best
+performance and underline denotes the second-best.
+3. Offline RL Model: the instruct model trained
+using offline rollouts based on the prompt de-
+scribed in the appendix. The training follows
+the same reward function outlined in Section 3.3.
+We select the checkpoint with the highest vali-
+dation accuracy for evaluation.
+4. Raw Instruct Model with Larger Scale: we
+use the 7B variant of the Qwen Instruct model
+and the 8B variant of the Llama Instruct model
+to assess the effect of scale.
+4.4
+Result
+Main Result
+The comparison between online training and base-
+line methods on the training dataset’s test set
+(FEVEROUS and EX-FEVER) and the held-out
+datasets (FEVER, HOVER, and SciFACT )is pre-
+sented in Table 1. Table 2 additionally reports a
+label-wise comparison of joint accuracy. We also
+record evidence scores of all models across the five
+datasets in Table 3. From these results, we draw
+several key observations:
+Online claim verification remains a challeng-
+ing task for current models.
+Even the state-of-
+the-art model, GPT-4o, achieves joint accuracies
+ranging from 26.64% to 59.30% across different
+datasets. This highlights the inherent difficulty
+of online claim verification, which requires iter-
+ative reasoning, information retrieval, and judg-
+Model
+FEVEROUS
+EX-FEVER
+FEVER
+SciFACT
+HOVER
+GPT-4o
+0.4558
+0.4185
+0.4242
+0.3187
+0.6945
+Qwen2.5-3B-Instruct
+0.2735
+0.2893
+0.2327
+0.1940
+0.5022
+Qwen2.5-3B-Instruct-SFT
+0.2468
+0.2960
+0.2397
+0.1972
+0.4753
+Qwen2.5-3B-Instruct-OfflineRL
+0.3837
+0.3361
+0.3441
+0.2459
+0.5389
+Qwen2.5-7B-Instruct
+0.3397
+0.3323
+0.3383
+0.1891
+0.5646
+Qwen2.5-3B-Instruct-OnlineRL
+0.4769
+0.4635
+0.4630
+0.2713
+0.6562
+Llama3.2-3B-Instruct
+0.1934
+0.2444
+0.1732
+0.0963
+0.3484
+Llama3.2-3B-Instruct-SFT
+0.1995
+0.2433
+0.1742
+0.1004
+0.3766
+Llama3.2-3B-Instruct-OfflineRL
+0.3097
+0.3140
+0.2601
+0.0863
+0.4587
+Llama3.1-8B-Instruct
+0.3763
+0.3969
+0.3368
+0.2073
+0.6209
+Llama3.2-3B-Instruct-OnlineRL
+0.4607
+0.4717
+0.4389
+0.2410
+0.6610
+Table 3:
+Evidence Score Comparison across five
+datasets. Within each model group, bold denotes the
+best performance and underline denotes the second-
+best.
+ment. Furthermore, models face additional chal-
+lenges stemming from multi-hop reasoning, the
+need for induction, and the ambiguous nature of
+many claims.
+Online RL training substantially enhances mod-
+els’ verification capabilities.
+Models trained
+with Online RL achieve the highest scores across
+all metrics among models of the same parameter
+scale and, in many cases, even outperform larger-
+scale counterparts. This outcome aligns with our
+expectations, as online training mirrors the eval-
+uation environment, enabling the model to better
+adapt to the system. These findings underscore the
+effectiveness of our Veri-R1 framework.
+RL training outperforms SFT in the claim veri-
+fication domain.
+In most cases, models trained
+with RL achieve higher scores than their SFT coun-
+terparts. A possible reason is that SFT relies on
+8
+
+
+
+===== PAGE 9 =====
+reasoning trajectories generated by GPT-4o, which
+may lead the model to imitate the format of reason-
+ing rather than genuinely learning the verification
+process. Moreover, these trajectories may differ
+from the reasoning logic required for other datasets,
+thereby limiting the model’s generalizability. In
+contrast, RL enables the model to actively explore
+and learn from higher-quality trajectories, which
+substantially enhances its verification capability.
+Other Findings
+In addition to demonstrating the efficacy of online
+reinforcement learning, we identify several other
+noteworthy findings, which are presented below.
+Supervised Fine-Tuning does not guarantee im-
+provement
+In many cases, SFT versions under-
+perform their base counterparts, suggesting that
+pure supervised tuning can lead to overfitting on
+training data distributions. This overfitting may
+reduce the model’s ability to generalize to out-of-
+distribution claims, especially when real-world fact
+verification requires handling noisier or more var-
+ied evidence than the training set. Additionally,
+SFT may bias the model toward producing con-
+fident but incorrect predictions if the supervision
+data lacks sufficient coverage of borderline or am-
+biguous cases.
+Model size advantage is task-dependent
+As is
+shown in Table 2, larger models (e.g., LLaMA3.1-
+8B) tend to excel in SUPPORT/REFUTE judg-
+ments, likely because increased parameter capac-
+ity enhances their ability to absorb broad factual
+knowledge, retrieve relevant information, and per-
+form multi-hop reasoning when sufficient evidence
+exists. In contrast, NEI detection requires a differ-
+ent skill set—careful uncertainty calibration, recog-
+nition of evidence gaps, and the ability to resist
+making unwarranted inferences. These abilities
+are less tied to sheer model size and more depen-
+dent on training signals that penalize overconfident
+answers in the absence of proof. Online RL ap-
+pears to aid NEI performance by encouraging more
+cautious, evidence-driven predictions, as seen in
+cases like Qwen2.5-3B-Instruct-OnlineRL’s high
+NEI accuracy in EX-FEVER.
+REFUTE is generally the hardest label for mod-
+els
+Across datasets, REFUTE (or CONTRA-
+DICTS) accuracies are usually lower and more
+variable than SUPPORT or NEI. This difficulty
+likely stems from the need to retrieve not just rel-
+evant evidence, but specific counter-evidence that
+clearly contradicts the claim. Contradictions often
+require more precise reasoning about causal rela-
+tionships, negation, or temporal mismatches, and
+errors in evidence retrieval or reasoning chains can
+easily lead the model to misclassify REFUTE as
+NEI or SUPPORT.
+5
+Analysis
+5.1
+Effect of Evidence Reward
+To directly incentivize precise evidence selection,
+we introduce an evidence-score based reward dur-
+ing the online reinforcement-learning phase. Fig-
+ure 5a and 5b compare the evolution of this
+metric with and without the evidence reward on
+the Qwen2.5-3B-Instruct model. While the “no-
+reward” variant exhibits an initial uptick in evi-
+dence score over the first 40 training steps, its per-
+formance subsequently degrades. By contrast, the
+model trained with the evidence-score reward main-
+tains consistent improvement, demonstrating that
+explicit supervision via the evidence score is essen-
+tial for robust, high-precision evidence retrieval in
+an interactive verification setting.
+(a) Qwen Evidence Score
+(b) Llama Evidence Score
+(c) Qwen Veri Acc
+(d) Llama Veri Acc
+(e) Qwen Evid Cover Rate
+(f) Llama Evid Cover Rate
+Figure 5: Training curves from the ablation study. Pan-
+els (a)–(b) report evidence score under the evidence
+score ablation, while panels (c)–(d) show verification
+accuracy and panels (e)–(f) show evidence cover rate
+under the validity weight ablation.
+9
+
+
+
+===== PAGE 10 =====
+5.2
+Effect of Weight Validity
+To encourage LLMs to learn from genuinely cor-
+rect reasoning rather than shortcut paths that merely
+happen to yield the right answer, we introduce a
+validity weight. We evaluate two key metrics dur-
+ing training: evidence cover rate and verification
+accuracy. The evidence cover rate is defined as the
+proportion of responses in which the model covers
+all gold-standard evidences.
+As illustrated in Figure 5c and 5d, both the Qwen
+and Llama models augmented with validity weight
+achieve higher verification accuracy throughout
+training.
+Because we incorporate an evidence-
+based reward into the total objective, models re-
+ceive greater reward when they retrieve more gold
+evidences. As a result, they learn to produce an-
+swers grounded in the gold evidence set; yet, even
+with this evidence reward, they still underperform
+the variants trained with validity weight.
+We also observe notable differences in evidence
+cover rate in Figure 5e and 5f. For the Qwen model
+without validity weight, the evidence cover rate
+declines sharply after sixty training steps, implying
+that the model has discovered a shortcut to verify
+claims rather than performing the comprehensive
+verification we intended. Although this model grad-
+ually improves its ability to retrieve gold evidences,
+it remains inferior to the validity-weighted variant.
+In conclusion, incorporating a validity weight
+guides the model toward reasoning trajectories that
+yield both correct answers and sound justifications,
+thereby stabilizing the training process and prevent-
+ing the model from exploiting the reward function.
+5.3
+Relationship between Accuracy and
+Confidence
+We conducted an experiment to quantify model con-
+fidence by extracting the output logit correspond-
+ing to each predicted label and recording these as
+triplets of label–logit pairs. Examination of the re-
+sulting logit distribution (Figure 6a and 6b) reveals
+that most values cluster near zero, suggesting that,
+in general, models exhibit high confidence in their
+predictions. We attribute this phenomenon, at least
+in part, to the fact that extensive intermediate rea-
+soning processes help models resolve uncertainty
+before producing a final judgment.
+To investigate the relationship between answer
+confidence and accuracy, we defined two confi-
+dence tiers: low confidence (logit < 0.85) and
+high confidence (logit > 0.95). As shown in Fig-
+(a) Qwen Logit Dist
+(b) Llama Logit Dist
+(c) Qwen Acc vs. Conf
+(d) Llama Acc vs. Conf
+(e) Precision Analysis
+(f) Recall Analysis
+Figure 6: Bar-based analysis of accuracy and logits.
+Panels (a)–(b) display the logit distributions of Qwen
+and Llama, panels (c)–(d) report accuracy versus con-
+fidence, and panels (e)–(f) present recall and precision
+across models and labels.
+ure 6c and 6d, for SUPPORT and REFUTE la-
+bels, both Qwen and Llama models demonstrate
+higher confidence levels accompanied by corre-
+spondingly higher accuracy rates. In contrast, the
+NOT ENOUGH INFO (NEI) label exhibits lower
+logits overall, and notably, higher confidence does
+not consistently translate into improved accuracy
+for this category. Indeed, the trend reverses for
+Qwen and Llama in this case.
+We further observe in Figure 6e and 6f that in-
+creasing model scale correlates with a decreased
+propensity to predict the “NOT ENOUGH INFO”
+category: in both architectures, the 7 and 8 billion-
+parameter variants exhibit lower NEI recall than
+their 3 billion-parameter counterparts. In partic-
+ular, the notably poor NEI recall of Qwen2.5-7B-
+Instruct appears to result from a semantic confusion
+in which many genuine NEI instances are misclas-
+sified as REFUTE.
+6
+Conclusion
+To address the critical challenge of enhancing ver-
+ification capabilities across diverse scenarios, we
+introduce the Veri-R1 framework, which lever-
+ages reinforcement learning to guide models in
+reasoning, evidence retrieval, and judgment under
+an online claim verification setting. Empirically,
+10
+
+
+
+===== PAGE 11 =====
+models trained with Online RL consistently outper-
+form their counterparts of the same scale trained
+via SFT or Offline RL, and in many cases even
+surpass larger-scale models within the same se-
+ries—demonstrating the effectiveness of the Veri-
+R1 paradigm. Our component-wise reward anal-
+ysis elucidates the specific contributions of each
+reward signal to the training process, while logit
+probing reveals the relationship between output
+confidence and answer accuracy. We envision this
+work as a step toward more precise and faithful
+claim verification pipelines capable of handling
+diverse real-world challenges.
+Limitations
+Our training and evaluation are performed in an
+online setting with a fixed local corpus and re-
+triever. In practice, claim verification often op-
+erates over far larger, dynamic corpora with con-
+tinuously emerging information. Integrating a real-
+world–scale retriever into this framework would
+better reflect practical conditions and likely im-
+prove the reliability and robustness of both training
+and evaluation.
+References
+Rami Aly, Zhijiang Guo, Michael Schlichtkrull, James
+Thorne, Andreas Vlachos, Christos Christodoulopou-
+los, Oana Cocarascu, and Arpit Mittal. 2021. Fever-
+ous: Fact extraction and verification over unstruc-
+tured and structured information.
+arXiv preprint
+arXiv:2106.05707.
+Isabelle Augenstein, Christina Lioma, Dongsheng
+Wang, Lucas Chaves Lima, Casper Hansen, Chris-
+tian Hansen, and Jakob Grue Simonsen. 2019. Mul-
+tifc: A real-world multi-domain dataset for evidence-
+based fact checking of claims.
+arXiv preprint
+arXiv:1909.03242.
+Mars Gokturk Buchholz. 2023. Assessing the effective-
+ness of gpt-3 in detecting false political statements:
+A case study on the liar dataset.
+arXiv preprint
+arXiv:2306.08190.
+Xiusi Chen, Gaotang Li, Ziqi Wang, Bowen Jin, Cheng
+Qian, Yu Wang, Hongru Wang, Yu Zhang, Denghui
+Zhang, Tong Zhang, and 1 others. 2025. Rm-r1:
+Reward modeling as reasoning.
+arXiv preprint
+arXiv:2505.02387.
+Alphaeus Dmonte, Roland Oruche, Marcos Zampieri,
+Prasad Calyam, and Isabelle Augenstein. 2024.
+Claim verification in the age of large language mod-
+els: A survey. arXiv preprint arXiv:2408.14317.
+Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey,
+Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman,
+Akhil Mathur, Alan Schelten, Amy Yang, Angela
+Fan, and 1 others. 2024. The llama 3 herd of models.
+arXiv e-prints, pages arXiv–2407.
+Jiazhan Feng, Shijue Huang, Xingwei Qu, Ge Zhang,
+Yujia Qin, Baoquan Zhong, Chengquan Jiang, Jinxin
+Chi, and Wanjun Zhong. 2025. Retool: Reinforce-
+ment learning for strategic tool use in llms. arXiv
+preprint arXiv:2504.11536.
+Haisong Gong, Jing Li, Junfei Wu, Qiang Liu, Shu Wu,
+and Liang Wang. 2025. Strive: Structured reasoning
+for self-improvement in claim verification. arXiv
+preprint arXiv:2502.11959.
+Jian Guan, Jesse Dodge, David Wadden, Minlie Huang,
+and Hao Peng. 2023. Language models hallucinate,
+but may excel at fact verification. arXiv preprint
+arXiv:2310.14564.
+Lovisa Hagström, Sara Vera Marjanovi´c, Haeun Yu,
+Arnav Arora, Christina Lioma, Maria Maistro, Pepa
+Atanasova, and Isabelle Augenstein. 2024. A reality
+check on context utilisation for retrieval-augmented
+generation. arXiv preprint arXiv:2412.17031.
+Andreas Hanselowski, Hao Zhang, Zile Li, Daniil
+Sorokin, Benjamin Schiller, Claudia Schulz, and
+Iryna Gurevych. 2018. Ukp-athene: Multi-sentence
+textual entailment for claim verification.
+arXiv
+preprint arXiv:1809.01479.
+Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan
+Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang,
+Weizhu Chen, and 1 others. 2022. Lora: Low-rank
+adaptation of large language models. ICLR, 1(2):3.
+Qisheng Hu, Quanyu Long, and Wenya Wang. 2024.
+Decomposition dilemmas: Does claim decompo-
+sition boost or burden fact-checking performance?
+arXiv preprint arXiv:2411.02400.
+Qisheng Hu, Quanyu Long, and Wenya Wang. 2025a.
+Boost: Bootstrapping strategy-driven reasoning pro-
+grams for program-guided fact-checking.
+arXiv
+preprint arXiv:2504.02467.
+Qisheng Hu,
+Quanyu Long,
+and Wenya Wang.
+2025b. Coordinating search-informed reasoning and
+reasoning-guided search in claim verification. arXiv
+preprint arXiv:2506.07528.
+Shijue Huang, Hongru Wang, Wanjun Zhong, Zhaochen
+Su, Jiazhan Feng, Bowen Cao, and Yi R. Fung.
+2025a. Adactrl: Towards adaptive and controllable
+reasoning via difficulty-aware budgeting. Preprint,
+arXiv:2505.18822.
+Yani Huang, Richong Zhang, Zhijie Nie, Junfan Chen,
+and Xuefeng Zhang. 2025b. A graph-based verifi-
+cation framework for fact-checking. arXiv preprint
+arXiv:2503.07282.
+Rodrigo Toro Icarte, Toryn Q Klassen, Richard Valen-
+zano, and Sheila A McIlraith. 2022. Reward ma-
+chines: Exploiting reward function structure in rein-
+forcement learning. Journal of Artificial Intelligence
+Research, 73:173–208.
+11
+
+
+
+===== PAGE 12 =====
+Hyewon Jeon and Jay-Yoon Lee. 2025. Graphcheck:
+Multi-path fact-checking with entity-relationship
+graphs. arXiv preprint arXiv:2502.20785.
+Yichen Jiang, Shikha Bordia, Zheng Zhong, Charles
+Dognin, Maneesh Singh, and Mohit Bansal. 2020.
+Hover: A dataset for many-hop fact extraction and
+claim verification. arXiv preprint arXiv:2011.03088.
+Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon,
+Sercan Arik, Dong Wang, Hamed Zamani, and Jiawei
+Han. 2025. Search-r1: Training llms to reason and
+leverage search engines with reinforcement learning.
+arXiv preprint arXiv:2503.09516.
+Leslie Pack Kaelbling, Michael L Littman, and An-
+drew W Moore. 1996. Reinforcement learning: A
+survey. Journal of artificial intelligence research,
+4:237–285.
+Kyungha Kim, Sangyun Lee, Kung-Hsiang Huang,
+Hou Pong Chan, Manling Li, and Heng Ji. 2024. Can
+llms produce faithful explanations for fact-checking?
+towards faithful explainable fact-checking via multi-
+agent debate. arXiv preprint arXiv:2402.07401.
+Yuxiang Lai, Jike Zhong, Ming Li, Shitian Zhao, and
+Xiaofeng Yang. 2025. Med-r1: Reinforcement learn-
+ing for generalizable medical reasoning in vision-
+language models. arXiv preprint arXiv:2503.13939.
+Nayeon Lee, Belinda Z Li, Sinong Wang, Wen-tau
+Yih, Hao Ma, and Madian Khabsa. 2020.
+Lan-
+guage models as fact checkers?
+arXiv preprint
+arXiv:2006.04102.
+Sergey Levine, Aviral Kumar, George Tucker, and Justin
+Fu. 2020. Offline reinforcement learning: Tutorial,
+review, and perspectives on open problems. arXiv
+preprint arXiv:2005.01643.
+Manling Li, Revanth Gangi Reddy, Ziqi Wang, Yi-
+Shyuan Chiang, Tuan Lai, Pengfei Yu, Zixuan Zhang,
+and Heng Ji. 2022. Covid-19 claim radar: A struc-
+tured claim extraction and tracking system. In Pro-
+ceedings of the 60th annual meeting of the associa-
+tion for computational linguistics: system demonstra-
+tions, pages 135–144.
+Miaoran Li, Baolin Peng, Michel Galley, Jianfeng Gao,
+and Zhu Zhang. 2023. Self-checker: Plug-and-play
+modules for fact-checking with large language mod-
+els. arXiv preprint arXiv:2305.14623.
+Xuefeng Li, Haoyang Zou, and Pengfei Liu. 2025.
+Torl: Scaling tool-integrated rl.
+arXiv preprint
+arXiv:2503.23383.
+Huanhuan Ma, Weizhi Xu, Yifan Wei, Liuji Chen, Liang
+Wang, Qiang Liu, and Shu Wu. 2023. Ex-fever: A
+dataset for multi-hop explainable fact verification.
+arXiv preprint arXiv:2310.09754.
+Jianbiao Mei, Tao Hu, Daocheng Fu, Licheng Wen, Xue-
+meng Yang, Rong Wu, Pinlong Cai, Xinyu Cai, Xing
+Gao, Yu Yang, and 1 others. 2025.
+O2-searcher:
+A searching-based agent model for open-domain
+open-ended question answering.
+arXiv preprint
+arXiv:2505.16582.
+Xinyi Mou, Xuanwen Ding, Qi He, Liang Wang, Jing-
+cong Liang, Xinnong Zhang, Libo Sun, Jiayu Lin,
+Jie Zhou, Xuanjing Huang, and 1 others. 2024. From
+individual to society: A survey on social simulation
+driven by large language model-based agents. arXiv
+preprint arXiv:2412.03563.
+Liangming Pan, Wenhu Chen, Wenhan Xiong, Min-
+Yen Kan, and William Yang Wang. 2021. Zero-shot
+fact verification by claim generation. arXiv preprint
+arXiv:2105.14682.
+Liangming Pan, Xiaobao Wu, Xinyuan Lu, Anh Tuan
+Luu, William Yang Wang, Min-Yen Kan, and
+Preslav Nakov. 2023. Fact-checking complex claims
+with program-guided reasoning.
+arXiv preprint
+arXiv:2305.12744.
+Dina Pisarevskaya and Arkaitz Zubiaga. 2025. Zero-
+shot and few-shot learning with instruction-following
+llms for claim matching in automated fact-checking.
+arXiv preprint arXiv:2501.10860.
+Cheng Qian, Emre Can Acikgoz, Qi He, Hongru Wang,
+Xiusi Chen, Dilek Hakkani-Tür, Gokhan Tur, and
+Heng Ji. 2025. Toolrl: Reward is all tool learning
+needs. arXiv preprint arXiv:2504.13958.
+Revanth Gangi Reddy, Sai Chetan, Zhenhailong Wang,
+Yi R Fung, Kathryn Conger, Ahmed Elsayed, Martha
+Palmer, Preslav Nakov, Eduard Hovy, Kevin Small,
+and 1 others. 2021. Newsclaims: A new benchmark
+for claim detection from news with attribute knowl-
+edge. arXiv preprint arXiv:2112.08544.
+Revanth Gangi Reddy, Sai Chetan Chinthakindi, Yi R
+Fung, Kevin Small, and Heng Ji. 2022. A zero-shot
+claim detection framework using question answering.
+In Proceedings of the 29th International Conference
+on Computational Linguistics, pages 6927–6933.
+Gavin A Rummery and Mahesan Niranjan. 1994. On-
+line Q-learning using connectionist systems, vol-
+ume 37. University of Cambridge, Department of
+Engineering Cambridge, UK.
+Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu,
+Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan
+Zhang, YK Li, Y Wu, and 1 others. 2024. Deepseek-
+math: Pushing the limits of mathematical reason-
+ing in open language models.
+arXiv preprint
+arXiv:2402.03300.
+Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin
+Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin
+Lin, and Chuan Wu. 2025. Hybridflow: A flexible
+and efficient rlhf framework. In Proceedings of the
+Twentieth European Conference on Computer Sys-
+tems, pages 1279–1297.
+12
+
+
+
+===== PAGE 13 =====
+Amir Soleimani, Christof Monz, and Marcel Worring.
+2020. Bert for evidence retrieval and claim veri-
+fication. In European Conference on Information
+Retrieval, pages 359–366. Springer.
+Qwen Team. 2024. Qwen2 technical report. arXiv
+preprint arXiv:2407.10671.
+James
+Thorne,
+Andreas
+Vlachos,
+Christos
+Christodoulopoulos,
+and
+Arpit
+Mittal.
+2018.
+Fever: a large-scale dataset for fact extraction and
+verification. arXiv preprint arXiv:1803.05355.
+Tam Trinh, Manh Nguyen, and Truong-Son Hy. 2025.
+Towards robust fact-checking: A multi-agent system
+with advanced evidence retrieval.
+arXiv preprint
+arXiv:2506.17878.
+Juraj Vladika, Ivana Hacajová, and Florian Matthes.
+2025. Step-by-step fact verification system for medi-
+cal claims with explainable reasoning. arXiv preprint
+arXiv:2502.14765.
+Ivan Vykopal, Martin Hyben, Robert Moro, Michal Gre-
+gor, and Jakub Simko. 2025. A generative-ai-driven
+claim retrieval system capable of detecting and re-
+trieving claims from social media platforms in multi-
+ple languages. arXiv preprint arXiv:2504.20668.
+David Wadden, Shanchuan Lin, Kyle Lo, Lucy Lu
+Wang, Madeleine van Zuylen, Arman Cohan, and
+Hannaneh Hajishirzi. 2020. Fact or fiction: Verifying
+scientific claims. arXiv preprint arXiv:2004.14974.
+Haoran Wang, Aman Rangapur, Xiongxiao Xu, Yueqing
+Liang, Haroon Gharwi, Carl Yang, and Kai Shu. 2024.
+Piecing it all together: Verifying multi-hop multi-
+modal claims. arXiv preprint arXiv:2411.09547.
+Hongru Wang, Cheng Qian, Wanjun Zhong, Xiusi Chen,
+Jiahao Qiu, Shijue Huang, Bowen Jin, Mengdi Wang,
+Kam-Fai Wong, and Heng Ji. 2025a. Otc: Optimal
+tool calls via reinforcement learning. arXiv e-prints,
+pages arXiv–2504.
+Zihan Wang, Kangrui Wang, Qineng Wang, Pingyue
+Zhang, Linjie Li, Zhengyuan Yang, Xing Jin, Kefan
+Yu, Minh Nhat Nguyen, Licheng Liu, and 1 others.
+2025b. Ragen: Understanding self-evolution in llm
+agents via multi-turn reinforcement learning. arXiv
+preprint arXiv:2504.20073.
+Ziliang Wang, Xuhui Zheng, Kang An, Cijun Ouyang,
+Jialu Cai, Yuhang Wang, and Yichao Wu. 2025c.
+Stepsearch: Igniting llms search ability via step-
+wise proximal policy optimization. arXiv preprint
+arXiv:2505.15107.
+Christopher JCH Watkins and Peter Dayan. 1992. Q-
+learning. Machine learning, 8(3):279–292.
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten
+Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou,
+and 1 others. 2022. Chain-of-thought prompting elic-
+its reasoning in large language models. Advances
+in neural information processing systems, 35:24824–
+24837.
+Yixuan Weng, Minjun Zhu, Fei Xia, Bin Li, Shizhu
+He, Shengping Liu, Bin Sun, Kang Liu, and Jun
+Zhao. 2022.
+Large language models are better
+reasoners with self-verification.
+arXiv preprint
+arXiv:2212.09561.
+Zhenghai Xue, Longtao Zheng, Qian Liu, Yingru Li,
+Zejun Ma, and Bo An. 2025.
+Simpletir: End-
+to-end reinforcement learning for multi-turn tool-
+integrated reasoning. https://simpletir.notion.
+site/report. Notion Blog.
+Siliang Zeng, Quan Wei, William Brown, Oana
+Frunza, Yuriy Nevmyvaka, and Mingyi Hong. 2025.
+Reinforcing multi-turn reasoning in llm agents
+via turn-level credit assignment.
+arXiv preprint
+arXiv:2505.11821.
+Hengran Zhang, Ruqing Zhang, Jiafeng Guo, Maarten
+de Rijke, Yixing Fan, and Xueqi Cheng. 2023.
+From relevance to utility: Evidence retrieval with
+feedback for fact verification.
+arXiv preprint
+arXiv:2310.11675.
+Yaowei Zheng, Richong Zhang, Junhao Zhang, Yan-
+han Ye, Zheyan Luo, Zhangchi Feng, and Yongqiang
+Ma. 2024.
+Llamafactory: Unified efficient fine-
+tuning of 100+ language models.
+arXiv preprint
+arXiv:2403.13372.
+Zhi Zheng and Wee Sun Lee. 2025.
+Reasoning-
+cv:
+Fine-tuning powerful reasoning llms for
+knowledge-assisted claim verification.
+arXiv
+preprint arXiv:2505.12348.
+13
+
+
+
+===== PAGE 14 =====
+A
+Logit Distribution for Each Label
+For the SUPPORT label, the answer logits pro-
+duced by both models are primarily concentrated
+near 1, indicating high model confidence. Addi-
+tionally, there is a secondary, low-density concen-
+tration in the lower logit regions — approximately
+between -20 and -10 for Qwen, and between -14
+and -10 for LLaMA. As previously analyzed, an-
+swers falling within these low logit intervals are
+more likely to be incorrect.
+Figure 7: Logit Distribution for SUPPORT
+For the REFUTE label, the logits are similarly
+centered near 1, reflecting high confidence for cor-
+rect predictions. However, unlike the SUPPORT la-
+bel, there is no notable secondary peak; instead, the
+remaining logits are relatively evenly distributed
+across the entire range, suggesting a more uniform
+uncertainty profile.
+Figure 8: Logit Distribution for REFUTE
+In contrast, for the NOT ENOUGH INFO label,
+the models exhibit substantially lower confidence.
+This is evident from the noticeably reduced density
+near logit = 1. Furthermore, the logits are more
+widely spread across the range, with elevated densi-
+ties in non-peak regions compared to the SUPPORT
+and REFUTE labels. This indicates a broader dis-
+tribution of model uncertainty when handling in-
+stances labeled as NOT ENOUGH INFO.
+Figure 9: Logit Distribution for NEI
+B
+Training Configuration
+All experiments were conducted on a compute node
+with two NVIDIA A800-80G GPUs. Running On-
+line RL training on this hardware takes approxi-
+mately 15 hours to complete 100 steps. Sentence
+retrieval from the corpus is performed using the
+FAISS library. In addition, we group every three
+sentences into one entry, and in each turn we re-
+trieve the most related three entries.
+Setting
+Train Batch Size
+256
+Validation Batch Size
+256
+Max Prompt Length
+4864
+Max Response Length
+512
+Max Start Length
+512
+Max Observation Length
+768
+Actor Rollout
+Learning Rate
+1e-6
+LR Warmup Ratio
+0.285
+Use KL Loss
+true
+PPO Mini Batch Size
+64
+PPO Micro Batch Size
+16
+KL Loss Coefficient
+0.001
+KL Loss Type
+low_var_kl
+Actor Rollout Reference — Rollout
+Log-Prob Micro Batch Size
+64
+Tensor Model Parallel Size
+1
+Rollout Engine Name
+vllm
+GPU Memory Utilization
+0.6
+Number of Agents
+3
+Temperature
+0.8
+Actor Rollout Reference — Reference Model
+Ref Log-Prob Micro Batch Size
+64
+Ref FSDP Param Offload
+True
+Trainer Setting
+GPUs per Node
+2
+Save Frequency (epochs)
+5
+Test Frequency (epochs)
+5
+Total Epochs
+10
+Other
+Max Turns
+4
+Retriever Top-K
+3
+Table 4: Configuration For Training Process
+14
+
+
+
+===== PAGE 15 =====
+C
+Details of Dataset Processing
+FEVEROUS
+To counteract the imbalance in
+both task difficulty and label distribution, we in-
+clude every sample from underrepresented chal-
+lenge categories and uniformly subsample 3,000
+instances for each label before adding them to our
+training pool. Besides, we evenly sampled data
+each label from the development set as evaluation
+set.
+EX-FEVER
+In our experiments, we utilize only
+the gold labels and evidence, randomly selecting
+3,000 examples per label for inclusion in the train-
+ing pool. Besides, we evenly sampled data each
+label from the development set as evaluation set.
+All the data of EX-FEVER comes from the devel-
+opment set.
+Final Training Dataset
+From the aggregated
+pool of FEVEROUS and EX-FEVER, we first ap-
+ply our filtering pipeline in Figure 3 to remove
+low-quality instances, then resample from the fil-
+tered data to assemble the final training set.
+FEVER
+We randomly select 900 data samples
+from the original FEVER dataset, comprising 300
+instances for each label. As the gold-standard evi-
+dence in FEVER is annotated at the sentence level,
+we preprocess the source documents by splitting
+them into individual sentences and grouping every
+three consecutive sentences to construct compact
+retrieval units.
+SciFACT
+Due to the limited size of the SciFACT
+dataset, we select as many samples as available
+for the label with the fewest instances (237 sam-
+ples each label). To ensure label consistency across
+datasets, we map the label CONTRADICT to RE-
+FUTE, aligning it with the labeling scheme used in
+FEVER. The document preprocessing procedure
+follows the same approach as in FEVER.
+HOVER
+As a multi-hop fact verification dataset,
+HOVER contains a considerable proportion of am-
+biguous claims. To address this, we employ GPT-
+4o to filter and retain samples with clearer, more
+objective judgments. Additionally, given that multi-
+hop claims often require extensive evidence, which
+poses challenges for models in accurately retrieving
+all supporting sentences, we limit our evaluation
+to 2-hop claims. The evaluation set is curated to
+ensure a balanced distribution between the SUP-
+PORT and NOT SUPPORTED labels (448 samples
+each label).
+D
+Data Quality
+Data quality plays a crucial role in maintaining a
+stable training process and ensuring the reliability
+of evaluation outcomes. During our data prepara-
+tion stage, we identified several types of issues and
+ambiguities within the raw datasets. To illustrate
+the potential limitations inherent in the current data,
+we selected representative examples of these prob-
+lems. Highlighting such issues not only reveals
+challenges in the existing datasets but also provides
+guidance for improving data creation practices in
+future work. The table illustrates three common
+Claim 1
+It is illegal in Illinois to record a conversation.
+Evidence 1
+[[Illinois law]]: Illinois law prohibits recording
+private conversations without the consent of all
+parties.
+Evidence 2
+[[2014 Revision]]:
+In 2014, the Illinois
+Supreme Court struck down the old statute, and
+the revised law now bans only secret record-
+ings of private conversations.
+Label
+REFUTE NOT ENOUGH INFO
+Note
+Overgeneralization: The claim is too abso-
+lute. The evidence shows that the law only
+makes it illegal under specific conditions (i.e.
+for private conversations, lacking consent). It
+is not correct to say all conversations in Illinois
+may not be recorded.
+Claim 2
+Honda Racing is an annual event organized by
+Honda to publicize ongoing projects.
+Evidence 1
+[[Honda Winner_sentence_0]]: The Honda
+Winner is an underbone motorcycle from the
+Japanese manufacturer Honda.
+Label
+REFUTE NOT ENOUGH INFO
+Note
+Entity mismatch: Evidence only describes
+Honda Winner as a motorcycle, not an event,
+leaving the claim unverified.
+Claim 3
+Jennifer Garner is an American actress raised
+in a city that is located at the confluence of the
+Elk and Kanawha rivers.
+Evidence 1
+[[Jennifer Garner]]: Jennifer Anne Garner
+(born April 17, 1972) is an American actress.
+Her breakthrough film debut was in the comedy
+Dude, Where’s My Car (2000). Following a
+supporting role in Pearl Harbor (2001), Garner
+gained recognition for her performance as CIA
+officer Sydney Bristow in the ABC spy-action
+thriller Alias, which aired from 2001 to 2006.
+For her work on the series, she won a Golden
+Globe Award and a SAG Award and received
+four Emmy Award nominations.
+Evidence 2
+[[Charleston, West Virginia]]: Charleston is the
+capital and the largest city in the U.S. state of
+West Virginia, and the county seat of Kanawha
+County. It is located at the confluence of the
+Elk and Kanawha Rivers in Kanawha County.
+Label
+SUPPORT NOT ENOUGH INFO
+Note
+Incomplete context: While the city’s location
+is confirmed, there is no direct evidence that
+Garner was raised there.
+Table 5: Examples of Data Quality Issues in Claim
+Verification
+15
+
+
+
+===== PAGE 16 =====
+data quality issues in claim verification: (1) Over-
+generalization where the claim makes an overly
+absolute statement not fully supported by the evi-
+dence; (2) Entity mismatch where the subject in
+the claim is different from the evidence; and (3)
+Incomplete context where critical linking informa-
+tion is missing. Addressing these issues improves
+label accuracy and dataset reliability.
+E
+Prompt
+The system prompt for online claim verification
+and offline claim verification is respectively illus-
+trated in Figure 4 and 10. Similar to the instruction
+in Figure 4 for online setting, prompt in Figure 10 is
+designed to leverage reinforcement learning (RL)
+for training LLMs in an offline setting. In this
+framework, the models are required solely to per-
+form reasoning and provide answers.
+F
+Additional Results
+To comprehensively evaluate models, we also re-
+port label-wise verification accuracy in Figures 6,
+and label-wise label accuracy in Figures 7. Online
+RL-trained models achieve the highest verification
+accuracy compared to other models of the same
+scale, and their performance is comparable to that
+of 7B and 8B counterparts. In terms of label ac-
+curacy, although Online RL does not exhibit over-
+whelmingly superior results, it consistently outper-
+forms the baseline instruct models. Offline RL
+demonstrates particular effectiveness in improving
+label accuracy for the Qwen model. However, label
+accuracy may not always provide a fully reliable
+measure, as models can achieve high scores in spe-
+cific labels while relying on incorrect reasoning,
+reflecting inherent biases or preferences.
+G
+Case Analysis
+In comparing the two RL trained models’ outputs
+(Figure 11), two key dimensions emerge: decom-
+position granularity and retrieval–evidence uti-
+lization.
+Decomposition Granularity
+Offline RL - Coarse (word-level) decomposi-
+tion
+The first model extracts isolated keywords —
+such as “Olympic medal”, “Olympic Games”, “first
+place”, and “awarding criteria” — and issues a sin-
+gle undifferentiated query. This strategy overlooks
+the claim’s internal logical structure and impedes
+precise verification of individual subclaims.
+Online RL - Fine-grained (subclaim-level) de-
+composition
+By contrast, the second model par-
+titions the overall assertion into two subclaims:
+1. “An Olympic medal is awarded to successful
+competitors at one of the Olympic Games.”
+2. “First place receives a medal awarded for the
+highest achievement in a non-military field.”
+Separate and tailored searches are conducted for
+each subclaim, ensuring that each component of the
+original claim undergoes independent validation.
+Retrieval and Evidence Utilization
+Offline RL - Redundant retrieval and unfocused
+evidence
+The first model repeatedly issues the
+same generic query (e.g., What are the criteria for
+awarding Olympic medals ?), obtains relevant or
+background information, and ultimately produces
+a “NOT ENOUGH INFO” label with irrelevant evi-
+dence.
+Online RL - Targeted retrieval and incremen-
+tal confirmation
+The second model formulates
+distinct queries for each subclaim and immediately
+integrates the retrieved information into its reason-
+ing. After confirming Subclaim 1, it proceeds to
+Subclaim 2, thereby constructing a coherent chain
+of thought. This workflow culminates in the correct
+“SUPPORT” judgment supported by precisely rele-
+vant evidence (e.g., the Olympic medal awarding
+criteria and the definition of a gold medal).
+Therefore, A subclaim-based decomposition
+strategy—combined with targeted retrieval and
+stepwise evidence confirmation—substantially
+enhances
+the
+precision
+and
+reliability
+of
+fact-verification performance.
+16
+
+
+
+===== PAGE 17 =====
+Claim Verification Assistant Prompt
+You are a claim-verification assistant. You MUST follow this protocol exactly:
+<information>
+[[e_1]]: info1
+[[e_2]]: info2
+...
+</information>
+- You will be given claim related information above.
+<think>. . . </think>
+- Use for every piece of reasoning.
+- During reasoning, you must verify the claim step by step based on the given information.
+<answer>
+Label: SUPPORT / REFUTE / NOT ENOUGH INFO
+Evidence: [[e_1]], [[e_3]], ...
+</answer>
+- Emit exactly once at the end, no extra text or tags.
+- Evidence id such as e_1 will be replaced by real ids from the corpus. You must include useful real
+ids when answering
+- Evidence outputs must strictly enforce the format [[e_i]], [[e_j]]...
+- Answer Labels respectively stand for:
+SUPPORT: The claim is consistent with the cited evidence and the evidence is sufficient to confirm
+the claim.
+REFUTE: The claim contradicts the cited evidence and the evidence is sufficient to disprove the
+claim.
+NOT ENOUGH INFO: The available evidence is insufficient to determine whether the claim is
+true or false.
+Verify the claim:
+{claim}
+<information>
+{evidence}
+</information>
+Figure 10: System Prompt for Offline Claim Verification.
+Model
+FEVEROUS (Veri Acc)
+EX-FEVER (Veri Acc)
+FEVER (Veri Acc)
+SciFACT (Veri Acc)
+HOVER (Veri Acc)
+SUPPORTS
+REFUTES
+NEI
+SUPPORT
+REFUTE
+NEI
+SUPPORTS
+REFUTES
+NEI
+SUPPORT
+CONTRADICT
+NEI
+SUPPORTED
+NOT SUPPORTED
+GPT-4o
+40.13%
+38.77%
+43.19%
+19.77%
+15.59%
+44.11%
+70.67%
+69.33%
+41.33%
+40.93%
+43.04%
+79.32%
+55.80%
+68.00%
+Qwen2.5-3B-Instruct
+18.37%
+13.61%
+40.48%
+12.55%
+5.32%
+41.83%
+48.33%
+43.00%
+50.33%
+26.58%
+2.53%
+63.71%
+35.40%
+65.60%
+Qwen2.5-3B-Instruct-SFT
+17.01%
+13.61%
+40.82%
+15.97%
+4.56%
+40.30%
+52.33%
+40.67%
+49.67%
+22.78%
+2.11%
+67.93%
+33.60%
+64.60%
+Qwen2.5-3B-Instruct-OfflineRL
+26.19%
+23.81%
+33.67%
+13.69%
+6.84%
+40.68%
+57.33%
+52.67%
+43.67%
+28.69%
+10.13%
+69.20%
+39.20%
+62.80%
+Qwen2.5-7B-Instruct
+25.17%
+27.89%
+23.47%
+15.21%
+10.65%
+27.00%
+61.67%
+63.67%
+24.00%
+28.69%
+10.13%
+54.01%
+41.00%
+73.20%
+Qwen2.5-3B-Instruct-OnlineRL
+33.67%
+29.93%
+45.24%
+19.77%
+10.65%
+66.92%
+58.00%
+54.67%
+55.00%
+19.41%
+14.77%
+90.30%
+44.80%
+65.40%
+Llama3.2-3B-Instruct
+17.35%
+4.42%
+36.05%
+14.83%
+3.04%
+42.59%
+48.00%
+32.67%
+32.33%
+25.32%
+0.42%
+42.19%
+26.60%
+46.00%
+Llama3.2-3B-Instruct-SFT
+17.35%
+7.14%
+30.95%
+16.73%
+3.80%
+35.74%
+49.67%
+36.33%
+39.00%
+26.58%
+0.42%
+45.99%
+29.60%
+47.20%
+Llama3.2-3B-Instruct-OfflineRL
+14.63%
+15.99%
+35.03%
+16.35%
+11.41%
+34.60%
+43.33%
+43.00%
+27.00%
+12.66%
+1.27%
+54.01%
+30.80%
+50.40%
+Llama3.1-8B-Instruct
+23.47%
+19.39%
+39.12%
+22.43%
+8.75%
+49.43%
+66.67%
+59.00%
+33.67%
+37.13%
+2.11%
+43.04%
+50.80%
+60.40%
+Llama3.2-3B-Instruct-OnlineRL
+26.53%
+20.41%
+31.97%
+25.10%
+13.69%
+52.09%
+67.33%
+58.00%
+34.67%
+30.80%
+12.66%
+74.26%
+48.40%
+61.40%
+Table 6: Evaluation of Verification Accuracy across five datasets. Within each model group, bold denotes the best
+performance and underline denotes the second-best.
+Model
+FEVEROUS (Label Acc)
+EX-FEVER (Label Acc)
+FEVER (Label Acc)
+SciFACT (Label Acc)
+HOVER (Label Acc)
+SUPPORTS
+REFUTES
+NEI
+SUPPORT
+REFUTE
+NEI
+SUPPORTS
+REFUTES
+NEI
+SUPPORT
+CONTRADICT
+NEI
+SUPPORTED
+NOT SUPPORTED
+GPT-4o
+86.05%
+65.64%
+43.19%
+50.19%
+69.96%
+44.11%
+90.33%
+91.33%
+41.33%
+69.20%
+76.37%
+79.32%
+79.20%
+68.00%
+Qwen2.5-3B-Instruct
+50.95%
+35.36%
+41.83%
+78.23%
+29.93%
+40.48%
+71.00%
+67.00%
+50.33%
+48.52%
+51.05%
+63.71%
+59.00%
+65.60%
+Qwen2.5-3B-Instruct-SFT
+51.33%
+36.50%
+40.30%
+71.09%
+30.27%
+40.82%
+73.67%
+62.67%
+49.67%
+48.95%
+49.79%
+67.93%
+57.20%
+64.60%
+Qwen2.5-3B-Instruct-OfflineRL
+50.57%
+59.32%
+40.68%
+75.85%
+50.68%
+33.67%
+80.00%
+78.00%
+43.67%
+65.82%
+60.34%
+69.20%
+60.20%
+62.80%
+Qwen2.5-7B-Instruct
+44.87%
+67.30%
+27.00%
+78.91%
+59.52%
+23.47%
+78.33%
+75.33%
+55.00%
+76.37%
+67.51%
+54.01%
+58.20%
+73.20%
+Qwen2.5-3B-Instruct-OnlineRL
+52.85%
+63.50%
+66.92%
+79.25%
+59.18%
+45.24%
+86.67%
+87.67%
+24.00%
+45.57%
+54.43%
+90.30%
+62.00%
+65.40%
+Llama3.2-3B-Instruct
+47.91%
+21.29%
+42.59%
+68.37%
+19.73%
+36.05%
+77.33%
+51.67%
+32.33%
+78.06%
+22.36%
+42.19%
+66.00%
+46.00%
+Llama3.2-3B-Instruct-SFT
+49.43%
+27.00%
+35.74%
+74.49%
+25.51%
+30.95%
+77.67%
+51.33%
+39.00%
+80.59%
+24.89%
+45.99%
+67.60%
+47.20%
+Llama3.2-3B-Instruct-OfflineRL
+42.59%
+48.29%
+34.60%
+60.54%
+36.73%
+35.03%
+80.33%
+65.67%
+27.00%
+61.18%
+40.08%
+54.01%
+64.00%
+50.40%
+Llama3.1-8B-Instruct
+60.84%
+46.77%
+49.43%
+75.85%
+37.76%
+39.12%
+88.67%
+82.00%
+34.67%
+88.19%
+45.57%
+43.04%
+75.00%
+60.40%
+Llama3.2-3B-Instruct-OnlineRL
+60.08%
+65.78%
+52.09%
+85.03%
+42.52%
+31.97%
+88.00%
+80.67%
+33.67%
+60.34%
+64.98%
+74.26%
+69.40%
+61.40%
+Table 7: Evaluation of Label Accuracy across five datasets. Within each model group, bold denotes the best
+performance and underline denotes the second-best.
+17
+
+
+
+===== PAGE 18 =====
+Figure 11: Case Analysis of Offline RL V.S. Online RL
+18

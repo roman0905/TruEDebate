@@ -1,0 +1,1915 @@
+
+
+===== PAGE 1 =====
+IConMoE: Modeling Intents of Misinformation using Concept
+Activation Vector-based Mixture of Experts
+Atul Kumar Singh
+Fujitsu Research of India Pvt. Ltd.
+Bengaluru, India
+atul.singh@fujitsu.com
+Rahul Mishra
+Fujitsu Research of India Pvt. Ltd.
+Bengaluru, India
+Rahul.N.Mishra@fujitsu.com
+Abstract
+Understanding the intent behind misinformation helps reveal dis-
+tinct patterns and underlying motives, enabling more accurate and
+efficient detection. However, existing approaches often struggle
+to effectively model the interplay of multiple coexisting intents
+within claims, and typically require additional LLM inferences to
+infer intent for each sample. In this paper, we introduce an intent-
+informed concept activation vector-based mixture-of-experts frame-
+work, iConMoE, which models latent intents in an unsupervised
+manner and predicts the veracity of claims in an end-to-end fash-
+ion, without the need for additional LLM inferences. Evaluated on
+three benchmark datasets, our method consistently outperforms
+both baseline and state-of-the-art models. We also conduct compre-
+hensive ablation studies and error analyses to highlight the contri-
+butions of individual components and identify key challenges. In
+addition, we provide a qualitative analysis of the learned intents
+across samples to offer deeper insights into the model’s reasoning.
+CCS Concepts
+• Information systems; • Computing methodologies →Causal
+reasoning and diagnostics; Natural language processing;
+Keywords
+Misinformation detection, Concept Activation Vectors, Mixture-of-
+Experts, Intent modeling
+ACM Reference Format:
+Atul Kumar Singh and Rahul Mishra. 2026. IConMoE: Modeling Intents of
+Misinformation using Concept Activation Vector-based Mixture of Experts.
+In Proceedings of the ACM Web Conference 2026 (WWW ’26), April 13–17,
+2026, Dubai, United Arab Emirates. ACM, New York, NY, USA, 12 pages.
+https://doi.org/10.1145/3774904.3792582
+1
+Introduction
+Verifying the veracity of online claims and detecting misinforma-
+tion typically requires modeling the context surrounding a given
+claim. This often requires auxiliary sources, such as corroborating
+evidence from the Web [25, 29], social media propagation patterns
+[2, 24], or user interactions [16]. However, these external signals
+are not always available, reliable, or scalable. In contrast, leveraging
+This work is licensed under a Creative Commons Attribution-NonCommercial-
+NoDerivatives 4.0 International License.
+WWW ’26, Dubai, United Arab Emirates
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2307-0/2026/04
+https://doi.org/10.1145/3774904.3792582
+📢 Claim Example:
+Hillary Clinton says: “The crowd (in Las Vegas) fled at the sound
+of gunshots. Imagine the deaths if the shooter had a silencer."
+✓ Ground Truth: Satirical exaggeration highlighting gun control debate and
+political manipulation, not a literal threat.
+Aspect
+Single intent model
+Multi intent model
+Political
+Manipulation
+Political
+Manipulation + Satire/Parody
+🎯Predicted
+Intent(s)
+Focuses solely on the
+political aspect and misses
+the satirical tone. As a result,
+it may misclassify the claim
+as a misleading or
+dangerous literal threat
+Processes the claim as
+a layered, satirical political
+statement by jointly
+modeling both intents,
+allowing deep interpretation
+of the underlying
+communication strategy.
+📊Analysis
+Failure Mode : Ignores
+nuanced communication
+strategies (e.g., irony,
+sarcasm).
+Benefit : Enables nuanced
+modeling of layered
+communication often used in
+politically charged
+misinformation.
+🏷️Contrast
+Figure 1: Illustration of Single- vs. Multi-Intent Detection in
+Misinformation Classification.
+intrinsic features of misinformation, particularly its underlying in-
+tent, offers a promising alternative [38]. Analyzing the underlying
+intent of misinformation facilitates the identification of system-
+atic patterns and strategic drivers, thereby improving the accuracy
+and efficiency of automated misinformation detection without re-
+lying on user engagement or social dissemination cues. However,
+prior work largely fails to capture the interaction of multiple coex-
+isting intents within a single claim, instead adopting a simplistic
+single-intent assumption. Furthermore, these methods [38, 40] often
+depend on repeated and computationally expensive LLM inferences
+to infer intent, making them impractical for deployment in scalable
+real-world misinformation detection systems.
+The key challenges in modeling and utilizing intents associated
+with claims are fivefold: 1) Unsupervised Inference: Intents must be
+inferred in an unsupervised manner, as manually annotating intents
+for each claim is neither scalable nor cost-effective. 2) Dynamic Cat-
+egorization: Intent categories should be determined dynamically in
+an end-to-end fashion to support real-world deployment scenarios.
+3) Efficiency Constraints: The approach should avoid relying on mul-
+tiple expensive LLM inferences to determine intents. 4) Multi-Intent
+Modeling: Instead of assuming a single intent per claim, the system
+should identify an appropriate mix of intents to enable more nu-
+anced and context-aware interpretations. 5) Category Delineation:
+There must be a clear separation between selected and omitted
+intent categories to ensure interpretability and control.
+1684
+
+
+
+===== PAGE 2 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Atul Kumar Singh and Rahul Mishra
+In this paper, we aim to address the aforementioned challenges by
+proposing a method that learns relevant misinformation intents in
+an unsupervised manner, without relying on large language model
+forward passes during training or inference. Our approach also
+models the interplay of multiple coexisting intents within a claim to
+capture deeper nuances underlying misinformation objectives. We
+introduce IConMoE, an intent-informed, concept activation vector
+(CAV)-based mixture-of-experts framework designed for end-to-
+end claim veracity prediction. IConMoE captures a latent mixture
+of user intents in an unsupervised manner. Concept activation
+vectors for each intent category are precomputed offline using user-
+provided examples, which obviates the need for expensive LLM
+inferences. Importantly, IConMoE is a plug-and-play module that
+can be seamlessly integrated into any pretrained model or LLM
+backbone to inject intent-aware reasoning.
+We employ cross-attention to learn the alignment between po-
+tential intent CAVs and the claim representations, while a mixture-
+of-experts mechanism models the latent combination of relevant
+intents. To ensure stable training and effective expert routing, we in-
+corporate a KL divergence loss. Furthermore, we apply a contrastive
+loss on the intent-informed CAV representations to promote seman-
+tic disentanglement and enhance the distinction between intent
+classes.
+Unlike prior baselines such as DM-INTER, which require re-
+peated intent-specific LLM forward passes with a time complexity
+of 𝑂(𝐾× 𝑁× 𝐷), our proposed IConMoE performs a single-pass
+encoding followed by lightweight intent alignment, reducing the
+overall complexity to 𝑂(𝑁× (𝐷+ 𝐾)), where 𝐾is the number of
+intents, 𝑁is the number of input samples, and 𝐷is the number of
+decoder layers. This makes IConMoE substantially more efficient
+for multi-intent inference at scale.
+The key contributions of this work are as follows: 1) We intro-
+duce, for the first time to our knowledge, a method for modeling
+intents behind misinformation using precomputed Concept Ac-
+tivation Vectors (CAVs), thereby eliminating the need for expen-
+sive LLM inferences. 2) We propose IConMoE, a novel framework
+that leverages a CAV-based mixture-of-experts (MoE) architecture
+to effectively learn the appropriate mixture of coexisting intents
+within claims. 3) We provide a comprehensive evaluation of our
+model across three benchmark datasets, demonstrating consistent
+improvements over relevant baselines and state-of-the-art methods.
+4) We conduct extensive ablation studies to systematically ana-
+lyze and reveal the impact of each design choice and component,
+highlighting their contributions to the overall effectiveness of the
+architecture in determining claim veracity.
+2
+Related Work
+Our approach draws on and unifies ideas from four research areas:
+misinformation detection, intent-aware analysis, concept-based
+interpretability, and mixture-of-experts architectures with routing
+and contrastive objectives.
+Misinformation Detection. Misinformation detection has been
+a central research focus due to its societal impact. The early meth-
+ods combined linguistic characteristics, propagation patterns, and
+metadata cues using traditional machine learning [2, 3, 22, 24]. With
+the advent of deep learning, CNNs and RNNs were adopted to cap-
+ture local and sequential dependencies [4, 25, 31]. More recently,
+pretrained transformers such as BERT [7], RoBERTa [20], and De-
+BERTa [13] have become the backbone of misinformation detection,
+enabling fine-grained contextual modeling [12]. Hybrid approaches
+incorporating multimodal or social signals [15, 34, 37] further im-
+proved robustness. Despite these advances, most approaches treat
+misinformation as a binary veracity classification task, without
+explicitly capturing the intent that drives misinformation creation.
+Intent-Aware Misinformation Detection. Intent plays a key
+role in shaping misinformation, as motives such as political manipu-
+lation, economic gain, or satire yield distinct patterns of spread and
+reception. Prior work modeled user behavior and diffusion dynam-
+ics to approximate intent [23, 37, 45], but these are largely indirect.
+More structured approaches rely on curated intent taxonomies
+[1, 41], which provide useful frameworks but require costly anno-
+tation. Wang et al. (2024) [38] introduced intent embeddings from
+human-curated categories to enrich semantic features, while Wang
+et al. (2025) [40] extended this with graph-based intent semantics
+co-modeling. Related work in stance detection and propaganda
+classification [31] addresses latent objectives behind the text but
+lacks explicit disentanglement of semantic and intent signals. In
+contrast, IConMoE learns mixtures of intents in an unsupervised
+manner.
+Concept-Based Interpretability. Concept Activation Vectors
+(CAVs), introduced by Kim et al. [17], provide post-hoc explana-
+tions by quantifying the sensitivity of a model to human-defined
+semantic concepts. Extensions such as LG-CAV [14] enhance con-
+cept learning in low-data regimes, primarily for vision–language
+tasks. In NLP, CAV are used to sensitize models towards novel un-
+seen concepts not covered in training for hate speech detection [11].
+Beyond interpretability, steering methods including Contrastive Ac-
+tivation Addition [28], Concept Bottleneck Models [18] and GCAV
+[44] show how concept supervision can guide predictions, yet no
+prior work has explored using mixtures of CAVs for intent modeling
+in misinformation detection.
+Mixture-of-Experts and Routing Mechanisms. Mixture-of-
+Experts (MoE) architectures enable conditional computation by
+activating only a subset of specialized expert modules per input,
+scaling models efficiently [10, 33]. Early routing mechanisms such
+as top-𝑘gating suffered from load imbalance and expert collapse
+[10]. Alternatives like expert choice and dynamic routing alleviate
+these issues, often using auxiliary losses to encourage expert diver-
+sity [8, 19]. MoEs have also been applied in domain adaptation and
+multitask learning by specializing experts by topic or style [33].
+Notably, IConMoE aligns gating and experts with interpretable
+intent-specific CAVs and employs contrastive and KL-divergence
+regularizations to maintain fidelity to human-understandable se-
+mantic concepts.
+3
+Methodology
+In this section, we present IConMoE, our intent-informed Concept
+Activation Vector Mixture-of-Experts framework. We first motivate
+the role of intent representations in misinformation detection, then
+outline the key components: (i) encoding intents as Concept Acti-
+vation Vectors (CAVs), (ii) Mixture of Intent-Expert routing, and
+1685
+
+
+
+===== PAGE 3 =====
+IConMoE: Modeling Intents of Misinformation using Concept Activation Vector-based Mixture of Experts
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Misinformation
+intent:
+Government is
+going to steal
+your money
+LLM (Mth
+Decoder
+Layer)
+CAVi
+Hidden
+Layer
+Embedding
+Claim: Climate change
+is a hoax created by
+solar panel companies
+LLM Decoder
+(M-1) layers
+Self Attention
+Claim
+Embedding
+WQ
+Gate
+Feed Forward
++ Softmax
+Misinformation
+intent:
+Government is
+going to steal
+your money
+Misinformation
+intent:
+Government is
+going to steal
+your money
+Contrastive
+factual
+example:
+In every 5 years,
+election is held.
+Contrastive
+factual
+example:
+In every 5 years,
+election is held.
+Contrastive
+factual
+example:
+In every 5
+years, election
+is held.
+Router
+CAV1 
+(Political Manipulation)
+CAV2
+(Financial Exploitation)
+CAV3
+(Religious Indoctrinate)
+CAV4
+(Social Manipulation)
+CAV5
+(Harm or Panic)
+CAV6
+(Satire or Parody)
+Cross Attn
+ Network
+WQ*CAVi
+Softmax
+WQ*CAVi
+WK*Claim
+WV*Claim
+Claim
+Embedding
+Shared MLP
+Expert Layers
+ Network 
+Figure 2: Overview of the IConMoE architecture. Intent-specific Concept Activation Vectors (CAVs) guide cross-attention to
+project claim embeddings into semantically aligned intent subspaces. The mixture-of-experts module, governed by a learned
+router, combines intent-specialized and shared experts through gated fusion. Auxiliary KL divergence and contrastive losses
+enhance routing consistency, semantic disentanglement, and interpretability across expert pathways.
+(iii) joint KL and contrastive loss for veracity prediction. Figure 2
+illustrates the overall architecture.
+3.1
+Intent Dataset Construction
+We define a representative taxonomy of six misinformation intents
+based on most frequently observed intent types in widely used
+misinformation corpora (Politifact and Snopes) and real-world fake
+news cases, denoted as I = { political manipulation, financial ex-
+ploitation, ideological/religious indoctrination, social/psychological
+manipulation, malicious harm or panic, satire/parody misinterpreted
+}. Analyses of these datasets show that these intents collectively
+cover the majority of misinformation narratives, spanning political,
+social and economic dimensions. While additional intents can be
+modeled easily in our framework, we intentionally adopt a compact
+taxonomy to demonstrate that even a small set of interpretable
+intents can result in strong performance gain.
+We first construct a small intent dataset using Gemini[6]. For
+Positive samples (𝑥+) for intent 𝑖, we prompt model to output
+misinformation sample containing that particular intent and for
+Negative samples (𝑥−), we prompt model to output factual claims
+matched in topic and style but not expressing intent. This yields a
+balanced dataset of 200 samples per intent, which are used for com-
+puting linearly separable concept vectors. Since CAVs require only
+approximate linear separability, prior work [17] demonstrates that
+such compact concept datasets are sufficient to effectively compute
+CAVs, highlighting the efficiency of the CAV-based approach. Refer
+to A.7 for intent vs non-intent based examples.
+3.2
+Computing Intent based Concept Activation
+Vectors
+To represent intent categories in the embedding subspace, we ex-
+tract Concept Activation Vectors (CAVs), which define semantic
+directions in the hidden layer embedding space of a pretrained
+language model. Each CAV is captured by the discriminative axis
+that separates examples aligned with a particular intent from its
+contrastive, non-intent counterparts.
+Formally, let 𝐶𝐴𝑉= 𝑐𝑎𝑣1,𝑐𝑎𝑣2, . . . ,𝑐𝑎𝑣𝑘denote the set of intent
+vectors which defines interpretable semantic directions aligned
+with intent categories, with each 𝑐𝑎𝑣𝑘∈R𝐻corresponding to one
+of 𝐾intent categories. We encode intent (𝑥+) and contrastive (𝑥−)
+samples, extracting embeddings ¯ℎ+, ¯ℎ−∈R𝐻after self-attention
+layer. Then, we train a linear classifier to separate ¯ℎ+ from ¯ℎ−, giving
+weight vector 𝑤𝑖. Normalizing the 𝑤𝑖yields the intent concept
+activation vector: 𝑐𝑎𝑣𝑖= 𝑤𝑖/∥𝑤𝑖∥
+Each vector 𝑐𝑎𝑣𝑘is orthogonal to the separating hyperplane,
+ensuring that the vector captures the essence of the concept itself,
+rather than artifacts of the classifier. CAVs are computed once using
+offline concept datasets and kept fixed during training to maintain
+interpretability and reduce overfitting.
+3.3
+CAV-Guided Cross-Attention
+To integrate Concept Activation Vectors (CAVs) into the model, we
+design a CAV-guided cross-attention mechanism that allows each
+intent-specific CAV to probe claim embeddings and highlight se-
+quence regions aligned with that intent. For six intent categories, let
+𝑐𝑎𝑣𝑖∈R𝐻denote the CAV for intent𝑖, where 𝐻is the embedding di-
+mensionality of the pretrained language model and 𝐸claim ∈R𝑆×𝐻
+1686
+
+
+
+===== PAGE 4 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Atul Kumar Singh and Rahul Mishra
+be the claim embeddings where 𝑆is the sequence length, and 𝐻
+the embedding dimension after the self-attention layer. We project
+them into query, key, and value spaces:
+𝑄𝑐𝑎𝑣𝑖= 𝑊𝑄𝑐𝑎𝑣𝑖,
+𝐾𝑐𝑙𝑎𝑖𝑚= 𝑊𝐾𝐸claim,
+𝑉𝑐𝑙𝑎𝑖𝑚= 𝑊𝑉𝐸claim, (1)
+where 𝑊𝑄,𝑊𝐾,𝑊𝑉∈R𝐻×𝐻are learnable projection matrices.
+Using the CAV-conditioned queries, we compute the scaled dot-
+product attention for each intent category:
+CAV-CrossAttn𝑖= softmax
+ 
+𝑄𝑐𝑎𝑣𝑖𝐾⊤
+𝑐𝑙𝑎𝑖𝑚
+√︁
+𝑑𝑘
+!
+𝑉𝑐𝑙𝑎𝑖𝑚.
+(2)
+The use of CAV-based queries 𝑄𝑐𝑎𝑣𝑖ensures that each attention
+head is directly conditioned on a human-interpretable semantic
+concept corresponding to specific intent 𝑖. To integrate this intent-
+aware information back into the claim representation, we use a
+residual connection:
+𝐸′
+cav = 𝐸claim + CAV-CrossAttn𝑖.
+(3)
+This residual update allows the model to retain the original claim
+information while enriching it with intent-specific context, which
+facilitates downstream expert specialization.
+3.4
+Intent-Specific Mixture of Experts
+After aligning the claim embeddings to semantically meaningful
+subspaces using CAV-guided attention, we pass them through a
+set of intent-specific expert networks. Experts are computational
+modules specialized to intents, each expert corresponds directly
+to one of the six predefined intent categories. Formally, for each
+expert 𝑖∈{1, . . . , 6}, the transformed representation is computed
+as:
+𝐹𝑖= LayerNorm
+
+𝐸′(𝑖)
+cav + Expert𝑖(𝐸′(𝑖)
+cav )
+
+,
+(4)
+where Expert𝑖(·) is a lightweight two-layer MLP defined as:
+Expert𝑖(ℎ) = 𝑊𝑖,2 · ReLU(𝑊𝑖,1ℎ+ 𝑏𝑖,1) + 𝑏𝑖,2,
+(5)
+with weights 𝑊𝑖,1 ∈R𝑑×𝑑, 𝑊𝑖,2 ∈R𝑑×𝑑, and corresponding biases
+𝑏𝑖,1,𝑏𝑖,2 ∈R𝑑, all learnable parameters unique to expert 𝑖. This
+two-layer design enables richer transformations within each intent
+subspace while maintaining parameter efficiency and allowing ex-
+perts to learn more expressive mappings to refine intent-specific
+signals.
+3.5
+Router Weighting and Final Aggregation
+A central challenge in modeling misinformation is that claims often
+exhibit multiple overlapping intents rather than belonging to a
+single mutually exclusive category. To address this, we adopt a soft
+router mechanism that adaptively allocates attention among experts.
+Given the claim embedding 𝐸claim ∈R𝑑, the router computes a
+probability vector 𝜋(𝑥) ∈R6, where each element 𝜋𝑖(𝑥) represents
+the probability of routing through expert 𝑖:
+𝜋(𝑥) = softmax(𝑊𝑟𝐸claim),
+(6)
+with 𝑊𝑟∈R6×𝑑being a trainable routing matrix. This softmax
+formulation ensures Í
+𝑖𝜋𝑖(𝑥) = 1, defining a valid categorical dis-
+tribution over the six experts.
+Each 𝑖-th expert 𝑓𝑖(𝑥) transforms the aligned claim representa-
+tion using intent-specialized computations. The final expert output
+is the expectation over all expert outputs under the router distribu-
+tion:
+𝐹expert =
+6
+∑︁
+𝑖=1
+𝜋𝑖(𝑥) · 𝑓𝑖(𝑥).
+(7)
+This allows smooth flow across intent dimensions, making it well-
+suited for claims that express mixed or ambiguous intent, allowing
+modeling of claims with multiple overlapping intents.
+3.6
+Shared Expert and Gated Combination
+We augment the expert module with a shared feedforward net-
+work, denoted FFNNshared, which captures additional intents that
+are not covered in our defined set of intents (such as popularize,
+communicate for true claims). While intent-specific experts cap-
+ture fine-grained distinctions among misinformation strategies, this
+shared expert serves as 1) a mechanism to have a smooth gradient
+flow for better stability in training 2) a complementing strategy for
+the intent-informed experts by capturing undefined intents.
+Expertshared = FFNNshared(𝐸claim),
+(8)
+where FFNNshared is a two-layer MLP with ReLU activation:
+FFNNshared(ℎ) = 𝑊𝑠,2 · ReLU(𝑊𝑠,1ℎ+ 𝑏𝑠,1) + 𝑏𝑠,2,
+(9)
+with 𝑊𝑠,1,𝑊𝑠,2 ∈R𝑑×𝑑and 𝑏𝑠,1,𝑏𝑠,2 ∈R.
+Since not all samples benefit equally from intent-enriched repre-
+sentation (from intent experts) versus generic representation (from
+shared expert), we introduce a gating mechanism to dynamically
+adjust their contributions. Specifically, a sigmoid gate computes the
+weight of the shared pathway as a function of the claim embedding:
+𝑔shared = 𝜎(𝑊𝑇
+𝑔𝐸claim + 𝑏𝑔),
+(10)
+where 𝑊𝑔∈R𝑑×1, 𝑏𝑔∈R𝑑, and 𝜎(·) is the sigmoid function.
+The final output representation is a gated combination of the expert
+and shared outputs:
+𝐹final = 𝑔shared ⊙Expert𝑖𝑛𝑡𝑒𝑛𝑡+ (1 −𝑔shared) ⊙Expert𝑠ℎ𝑎𝑟𝑒𝑑, (11)
+where ⊙denotes element-wise multiplication. This gate helps the
+model to decide for the underlying sample whether to emphasize
+on intent-enriched representation from intent experts or generic
+representation from shared expert. Please refer to discussion about
+shared gate value in Appendix 5.5.
+3.7
+Router Regularization via KL Divergence
+We guide the MoE router with intent-aligned Concept Activation
+Vectors (CAVs) because no external supervision specifies the correct
+expert for a claim. Let router logits be 𝑟∈R𝐾and
+𝑝router = softmax(𝑟),
+(12)
+which also encodes the model’s belief about the relevance of each
+expert. For each expert 𝑖we compute a stable cosine alignment
+between the expert contribution 𝑒𝑖−𝑒claim and the intent CAV 𝑐𝑎𝑣𝑖:
+𝑠𝑖=
+(𝑒𝑖−𝑒claim) · 𝑐𝑎𝑣𝑖
+∥𝑒𝑖−𝑒claim∥· ∥𝑐𝑎𝑣𝑖∥.
+(13)
+This cosine similarity quantifies how well the expert’s modifi-
+cation aligns with its intended semantic direction. A high score
+indicates that the expert meaningfully contributes to modeling
+1687
+
+
+
+===== PAGE 5 =====
+IConMoE: Modeling Intents of Misinformation using Concept Activation Vector-based Mixture of Experts
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+the intended intent. The scores are converted into a soft target
+distribution:
+𝑝target = softmax(𝑠),
+(14)
+The router is trained to match its predicted probabilities to the
+CAV-guided target using KL divergence:
+LKL = 𝑝router,𝑖· log
+
+𝑝router,𝑖
+𝑝target,𝑖+ 𝜖
+
+,
+(15)
+where 𝜖is a small constant to ensure numerical stability. This
+target distribution rewards experts that demonstrably shift the
+claim’s representation along their designated semantic axis. This
+encourages the router to place mass on experts whose outputs move
+the representation along interpretable intent axes.
+3.8
+Contrastive Loss on CAV-Guided Attention
+While Concept Activation Vectors (CAVs) are inherently inter-
+pretable, multiple CAV-guided cross-attention heads may converge
+to overlapping or redundant signals. To mitigate this, we introduce a
+contrastive separation objective that encourages each CAV-guided
+cross-attention head to capture a unique semantic direction. In-
+tuitively, the contrastive term pushes expert representations for
+different intents apart, avoiding entanglement between, say, ‘social-
+based’ and ‘political’ manipulation vectors.
+Let CAV-CrossAttn𝑖denote the cross-attention context vector
+produced by the 𝑖-th CAV for a given input token position which
+treats claim as anchor and computes similarity with all the CAVs.
+For each claim, cross-attention value acts as an alignment score and
+then we identify the top two most aligned cross-attention outputs
+as positives (CAV-CrossAttn𝑖, CAV-CrossAttn𝑗), while treating the
+remaining cross-attention outputs as negatives for the contrastive
+loss. For contrastive objective, we use InfoNCE [27] loss as:
+Lcontrastive(𝑖) = −log
+exp(𝑧𝑖/𝜏) + exp(𝑧𝑗/𝜏)
+Í
+𝑘∉{𝑖,𝑗} exp sim(𝑧𝑘/𝜏) + 𝜖,
+(16)
+where 𝑧𝑖= CAV-CrossAttn𝑖, 𝜏is a temperature parameter and
+𝜖ensures numerical stability. This loss enforces semantic diver-
+sity across intent-specific attention heads, ensuring that each CAV
+captures a distinct and non-redundant axis of intent.
+3.9
+Final Training Objective
+The overall training objective integrates task-level supervision with
+two auxiliary losses that enforce intent-specific disentanglement
+and faithful expert routing:
+Ltotal = Ltask + 𝜆· Lcontrastive + 𝛽· LKL,
+(17)
+where Ltask is the standard cross-entropy loss for predicting claim
+veracity, and 𝜆, 𝛽are scalar hyperparameters that balance the contri-
+butions of the auxiliary objectives. This multi-objective formulation
+stabilizes training, improves generalization to unseen claims, and
+ensures that the model’s reasoning paths remain transparent and
+aligned with human-understandable intents. Detailed analysis of
+hyperparameters (𝜆, 𝛽) present in A.6
+4
+Experimental Settings
+We design our experiments to evaluate the effectiveness of our
+intent-based framework and analyze the contribution of its compo-
+nents.
+4.1
+Datasets
+We evaluate IConMoE on three widely used misinformation detec-
+tion benchmarks that collectively cover political, social, and rumor-
+style content. To emulate real-world generalization, we adopt data
+splits consistent with prior work. Table 7 summarizes dataset sta-
+tistics.
+PolitiFact [29] and Snopes [36] serve as intent-aligned datasets,
+as the misinformation claims they contain align closely with the
+intent categories modeled in our framework (e.g., political manipu-
+lation, social polarization, financial exploitation). PolitiFact origi-
+nally provides six graded veracity labels—true, mostly true, half true,
+mostly false, false, and pants-on-fire—which we merge into binary
+classes: real (the first three) and fake (the latter three), following
+common practice. Snopes comprises fact-checked claims curated
+from the official Snopes fact-checking portal and is annotated with
+binary veracity labels.
+In contrast, GossipCop [34] is considered an intent-diverse dataset.
+It contains approximately 11.8K entertainment and rumor-based
+news articles labeled as real or fake. For temporal robustness, we
+follow the standard setup by training on data up to 2017 and testing
+on claims from 2018. Unlike PolitiFact and Snopes, the claims in
+GossipCop often center around celebrity rumors or popular culture
+misinformation, that does not directly correspond to the intent
+categories defined in our framework.
+4.2
+Baselines
+We benchmark IConMoE against diverse misinformation detection
+baselines, covering pretrained transformers, event-aware models,
+graph-based frameworks, and intent-conditioned methods. All are
+trained under identical splits for fair comparison. Section A.3 con-
+tains detailed description of baseline models.
+Pretrained Transformers: BERT [7] serve as strong text-only
+encoders, T5(base/large) [30] is encoder-decoder model evaluated
+in finetuned setting while LLaMA-3.1 (8B) [9] is evaluated in in-
+context and finetuned modes.
+Event- and Emotion-Aware Networks: EANN [39] learns
+event-invariant representations via adversarial objectives, BERT-
+Emo [45] integrates emotion in BERT and ENDEF [46] applies
+entity-level debiasing to mitigate overfitting.
+Multi-Source and Structural Models: MDFEND and Gen-
+FEND [26] incorporate domain and multimodal information, while
+MGIN-AG [43], MSynFD [42] exploit syntactic or graph-based cues
+for relational reasoning.
+Intent-Based Models: DM-Inter [38] models auxiliary intent
+vectors through self-supervised intervention.
+5
+Results and Discussion
+Our experiments are structured (refer to A.4 for detailed experimen-
+tal setup) to evaluate IConMoE across intent-aware and base models,
+compare it against diverse state-of-the-art baselines, and analyze
+the contributions of KL and contrastive losses, mixture of experts,
+and concept activation vectors. Additionally, we conduct qualitative
+router analysis under KL and contrastive loss, explore alternative
+CAV computation methods, perform layer-wise examination, and
+assess the hyperparameter sensitivity of the loss functions.
+1688
+
+
+
+===== PAGE 6 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Atul Kumar Singh and Rahul Mishra
+5.1
+Performance of IConMoE Across Intent
+Aware and Base Models
+To further establish the effectiveness of IConMoE, we evaluate its
+integration with a range of base architectures, from large decoder-
+only LLMs (LLaMA-3.1 8B) to smaller and larger encoder–decoder
+models (T5-base, T5-large). Table 1 reports results on GossipCop,
+Snopes, and PolitiFact. We compare four settings: (1) zero-shot in-
+context learning (ICL), (2) intent-enhanced LLMs where the closest
+intent tokens are concatenated to inputs, (3) standard fine-tuning
+of base models, (4) DM-Inter[38]
+Across all three misinformation datasets, GossipCop, Snopes, and
+PolitiFact, IConMoE delivers consistent and significant gains over
+baseline methods and prior intent-aware models. DM-Inter is built
+on top of T5-base, across all datasets, IConMoE (T5-base) consis-
+tently outperforms DM-Inter. On GossipCop, it improves Macro-F1
+from 79.8 to 81.5, on Snopes, IConMoE lifts performance from 64.5 to
+67.3 Macro-F1, and on PolitiFact, from 61.3 to 66.2. These gains con-
+firm that modeling mixture of intent as structured concept vectors
+with experts captures finer-grained semantic variation than DM-
+Inter’s single-intent intervention mechanism. For large decoder-
+only models, IConMoE also yields significant improvements over
+conventional fine-tuning. On GossipCop, it raises Macro-F1 from
+46.2 to 65.3 (+19.1 points), while on Snopes it climbs from 58.3 to
+67.5 (+9.1), and on PolitiFact from 55.8 to 63.2 (+7.4).
+Key insights from the results are: 1) LLaMA-3.1 8B alone performs
+weakly on misinformation detection under ICL or fine-tuning, yet
+with IConMoE, it reaches competitive performance which shows
+IConMoE acts as lifeline for weaker baselines. 2) IConMoE con-
+sistently outperforms prior baseline (DM-Inter) across datasets
+and model families. This shows that intent mixture modeling and
+CAV alignment are more effective than direct intent embeddings.
+3) Performance gains on both T5-base and T5-large suggest that
+IConMoE scales favorably with model size, but even smaller models
+benefit substantially. 4) IConMoE boosts both encoder–decoder and
+decoder-only small/large models, validating its general-purpose
+applicability.
+5.2
+Comparison with Diverse State-of-the-art
+Baselines
+Table 2 presents a comprehensive comparison of IConMoE against
+a wide range of existing misinformation detection baselines on
+PolitiFact and GossipCop.
+On Politifact, IConMoE with T5 large achieves the best perfor-
+mance across all metrics, obtaining 0.6874 Macro-F1 and 0.6875
+Accuracy. The improvement is particularly clear in class-specific
+F1-scores: IConMoE balances detection across real (0.6809) and fake
+(0.6939) classes, whereas prior methods (e.g., GenFEND, DM-Inter)
+tend to skew toward one class. The advantage here is important:
+Politifact contains politically charged claims with subtle intent
+differences, where explicit intent embeddings (DM-Inter) or emo-
+tional features (BERT-Emo) alone are insufficient. Since the Poli-
+tifact dataset deals primarily with political claims, the intents we
+define (e.g., political manipulation, social manipulation) are highly
+relevant. This strong alignment between dataset content and intent
+categories allows IConMoE to capture nuanced intent signals that
+improve classification.
+On GossipCop, IConMoE achieves strong performance (0.8423
+Macro-F1, 0.8870 Accuracy), significantly outperforming most prior
+baselines such as GenFEND (0.8367) and MSynFD (0.8051). Gossip-
+cop focuses on celebrity-related gossip which does not align with
+our predefined intents. Nevertheless, IConMoE still shows strong
+performance. This is because the shared representation layer of our
+architecture effectively captures undefined intents, allowing the
+model to generalize to gossip-specific cases that were not explicitly
+covered by our intent taxonomy.
+We note that INSIDE [40] reports slightly higher performance
+on GossipCop. However, IConMoE outperforms INSIDE’s reported
+results on PolitiFact. Direct comparison should be interpreted with
+caution, as INSIDE’s codebase and data splits are not publicly re-
+leased and differ from both our setup and prior standard parti-
+tions. INSIDE employs a complex graph-based reasoning module
+that requires explicit graph construction and additional annotation
+alignment, leading to higher computational and design overhead.
+In contrast, a critical strength of IConMoE lies in its adaptability,
+IConMoE functions as a plug-and-play, model-agnostic module that
+integrates seamlessly into any pretrained LLM backbone without
+supervising external intent signals, handcrafted graphs, or task-
+specific adaptations.
+5.3
+Ablation study
+To better understand the contribution of each design choice in
+IConMoe, we conduct an extensive ablation analysis on both the
+Politifact and Gossipcop datasets using T5-base. We systemati-
+cally disable or modify components of the framework to evaluate
+their impact on performance. Results are shown in Table 3 and
+Table 8 . Variants Considered. We evaluate the following ablation
+settings:
+• w/o KL Regularization: removes the KL-divergence loss
+• w/o Contrastive Loss: excludes the contrastive loss
+• Top-2 Routing: replaces soft intent routing with a hard
+top-2 gating mechanism.
+• w/o Shared Expert: removes the shared expert, forcing all
+features through experts.
+• w/o Intent Experts: removes the expert-specific MLPs and
+only takes the cross-attention values.
+• Single Combined Intent: merges all intents into a generic
+“misinformation” class, discarding fine-grained intents.
+Key Findings. 1) Regularization Matters: Both KL divergence
+and contrastive loss are crucial for stabilizing routing and Cross-
+attention output. Removing either reduces Macro F1 by 2-3 points
+across datasets. The contrastive loss especially affects Politifact,
+showing the importance of separating overlapping intents. 2) Rout-
+ing Strategy: Replacing soft routing with top-2 hard routing slightly
+improves Gossipcop but degrades Politifact, suggesting that politi-
+cal misinformation often involves mixtures of intents best modeled
+by probabilistic routing. 3) Shared Layer Contribution: Exclud-
+ing the shared semantic layer consistently harms performance es-
+pecially model performance on real claim. This supports our hy-
+pothesis that shared expert helps to capture the nuances of factual
+claim. 4) Expert Specialization: Removing expert MLPs leads to
+strong drop in the performance. This confirms that modular experts
+capture distinct misinformation strategies that a single classifier
+1689
+
+
+
+===== PAGE 7 =====
+IConMoE: Modeling Intents of Misinformation using Concept Activation Vector-based Mixture of Experts
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Table 1: Comparison of IConMoE with fine-tuned and intent-based baselines across GossipCop, Snopes, and PolitiFact. Statistical
+significance was confirmed using a paired t-test (𝑝< 0.05) between IConMoE (T5-l) and baselines.
+Model
+GossipCop
+Snopes
+PolitiFact
+Acc
+F1𝑀
+F1𝑅
+F1𝐹
+AUC
+Acc
+F1𝑀
+F1𝑅
+F1𝐹
+AUC
+Acc
+F1𝑀
+F1𝑅
+F1𝐹
+AUC
+ICL (LLaMA 8B)
+59.7
+52.6
+79.1
+34.4
+61.6
+55.8
+54.7
+47.8
+61.6
+57.9
+52.5
+52.5
+51.3
+53.7
+52.5
+Intent-LLM (8B)
+58.2
+51.1
+69.7
+32.7
+60.2
+56.3
+55.2
+48.4
+62.1
+58.4
+54.2
+53.0
+60.4
+45.5
+55.1
+Finetuned (Llama)
+72.9
+46.2
+84.1
+8.3
+64.8
+67.3
+58.3
+39.1
+77.6
+67.3
+56.7
+55.8
+49.5
+62.1
+56.1
+Finetuned (T5-b)
+85.7
+79.8
+97.5
+68.9
+85.2
+69.8
+48.5
+15.4
+81.6
+63.9
+59.2
+58.1
+51.5
+64.8
+58.5
+Finetuned (T5-l)
+86.7
+81.4
+91.3
+71.4
+86.2
+73.0
+64.0
+46.0
+82.0
+72.4
+64.2
+60.4
+59.2
+61.5
+60.4
+DM-Inter
+85.5
+79.8
+95.3
+69.0
+85.0
+74.1
+64.5
+46.4
+82.7
+72.9
+61.4
+61.3
+63.1
+59.4
+65.7
+IConMoE (Llama)
+79.3
+65.3
+85.6
+45.1
+74.7
+71.8
+67.5
+55.7
+79.3
+73.0
+63.3
+63.2
+65.6
+60.7
+63.7
+IConMoE (T5-b)
+86.9
+81.5
+91.6
+71.5
+86.4
+77.3
+67.3
+49.2
+83.5
+75.7
+66.3
+66.2
+67.2
+65.2
+66.3
+IConMoE (T5-l)
+88.7
+84.2
+92.5
+76.0
+88.2
+77.8
+67.7
+49.7
+85.7
+76.1
+68.8
+68.7
+68.1
+69.4
+67.9
+Table 2: Performance comparison of IConMoE with diverse
+state-of-the-art misinformation detection systems on Politi-
+Fact and GossipCop datasets.
+Politifact
+Method
+Macro F1
+Accuracy
+F1 (Real)
+F1 (Fake)
+BERT
+60.41
+60.83
+61.99
+60.87
+EANN
+61.07
+61.46
+61.59
+62.07
+MDFEND
+61.95
+60.27
+70.95
+52.95
+BERT-Emo
+62.51
+62.72
+61.48
+63.35
+ENDEF
+61.89
+62.84
+63.57
+61.29
+MGIN-AG
+62.28
+62.51
+63.01
+64.94
+MSynFD
+62.61
+62.52
+60.02
+65.28
+GenFEND
+63.80
+63.83
+64.05
+63.66
+DM-Inter
+61.77
+61.51
+63.20
+59.66
+IConMoE
+68.74
+68.75
+68.09
+69.39
+Gossipcop
+Method
+Macro F1
+Accuracy
+F1 (Real)
+F1 (Fake)
+BERT
+78.75
+84.39
+89.73
+67.81
+EANN
+79.31
+85.18
+90.40
+68.23
+MDFEND
+80.10
+85.61
+90.22
+69.60
+BERT-Emo
+79.12
+84.55
+89.74
+68.49
+ENDEF
+80.10
+85.20
+90.20
+69.87
+MGIN-AG
+80.43
+85.93
+90.74
+70.69
+MSynFD
+80.51
+87.02
+91.53
+70.34
+GenFEND
+83.67
+85.98
+89.95
+73.02
+DM-Inter
+79.60
+85.24
+90.07
+68.86
+IConMoE
+84.23
+88.70
+92.46
+76.00
+cannot. 5) Granularity of Intents: Collapsing all intents into a
+single “misinformation” class yields the worst results. This validates
+our hypothesis: explicit modeling of intent diversity is critical for
+robust detection.
+5.4
+Qualitative Analysis of Router Decisions
+To further examine the role of auxiliary losses in improving expert
+selection, we conduct a qualitative evaluation of router outputs.
+For each input, we obtain the top-2 intent CAVs selected by the
+Table 3: Ablation Study: Comparison of IConMoE Variants
+on Politifact and Gossipcop.
+Politifact
+Variant
+Acc
+F1 (R)
+F1 (F)
+Macro F1
+IConMoE
+66.25
+67.21
+65.24
+66.22
+IConMoE w/o KL
+63.75
+62.98
+64.49
+63.74
+IConMoE w/o Cons
+64.58
+63.20
+65.86
+64.53
+IConMoE Top2 routing
+65.42
+65.84
+64.98
+65.41
+IConMoE w/o Shared Expert
+65.00
+65.85
+64.10
+64.98
+IConMoE w/o Intent Experts
+62.50
+64.57
+60.18
+62.37
+IConMoE 1-Intent
+60.83
+61.48
+60.17
+60.82
+router and passed the query to LLM (Gemini 2.5)[6] acting as a
+semantic judge. We used LLM as a judge instead of human to en-
+sure consistency and avoiding the subjective human bias. Gemini
+assigns a score of 3 if both CAVs correspond to valid intents, 2 if
+only the top CAV is correct, 1 if only the second is correct, and 0 if
+neither is valid. Table 4 presents results on Politifact and Snopes.
+Table 4: Qualitative Router Analysis: Average Gemini-
+assigned correctness scores (0-3) for top-2 intent CAVs.
+Model Variant
+Politifact
+Snopes
+IConMoE (T5 base)
+1.93
+2.08
+IConMoE (T5 base) w/o KL
+1.71
+1.44
+IConMoE (T5 base) w/o KL + contrastive
+1.61
+1.10
+We observe that IConMoE (T5 base) achieves the highest semantic
+scores (1.93 and 2.08), indicating that both contrastive and KL regu-
+larization jointly guide the router toward intent-consistent expert
+choices. These findings highlight that the both auxillary objectives
+are complementary: the contrastive term ensures that intent-aligned
+CAVs are well separated in embedding space, while the KL term
+prevents degenerate expert assignments by softly regularizing the
+routing distribution. Together, they encourage the router to select
+intents that not only improve downstream accuracy but also match
+human-interpretable categories, thus improving the performance
+of IConMoE predictions.
+1690
+
+
+
+===== PAGE 8 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Atul Kumar Singh and Rahul Mishra
+5.5
+Significance of shared gate
+We observed that the shared gate exhibits two characteristic behav-
+iors. For fake claims, the gate consistently assigns higher weights
+to specialist experts, emphasizing intent-specific reasoning. In con-
+trast, for real claims, the gate mostly down-weights these intent-
+enriched representation and relies on the generic representation
+from shared expert. This trend is crucial: the shared expert cap-
+tures intents that lie outside the intent taxonomy. When a specialist
+expert is spuriously activated by intent-like tokens, the shared
+expert provides a corrective signal. Formally, the model output
+ˆ𝑧(𝑥) = softmax 𝑔(𝑥)𝐸(𝑥) + (1 −𝑔(𝑥))𝑆(𝑥) thus uses 𝑆(𝑥) as a
+robust fallback representation. In practice this reduces false posi-
+tives on real claims (where intent signals are weak or absent) and
+improves calibration by smoothing over overconfident specialist
+votes.
+5.6
+Analysis of classifier-free CAV computation
+Traditional CAV extraction requires training a linear classifier (e.g.,
+SVM or logistic regression) to separate positive and contrastive
+samples for each concept and each layer, which can be computa-
+tionally expensive at scale. To address this, we experiment with
+a classifier-free approach, where each Concept Activation Vector
+(CAV) is computed as the normalized mean difference between posi-
+tive and negative intent embeddings: 𝑐𝑎𝑣𝑖= ( ¯ℎ+
+𝑖−¯ℎ−
+𝑖)/(∥¯ℎ+
+𝑖−¯ℎ−
+𝑖∥)
+Table 5: Comparison of fine-tuned, classifier-based, and
+classifier-free CAV (embedding difference) approaches on
+Politifact and Gossipcop datasets.
+Politifact
+Model
+Acc
+F1(R)
+F1(F)
+Macro F1
+Finetune (T5-base)
+59.17
+51.49
+64.75
+58.12
+IConMoE (CAV-classifier)
+66.25
+67.21
+65.24
+66.22
+IConMoE (CAV-embedding)
+63.75
+61.67
+65.61
+63.64
+Gossipcop
+Finetune (T5-base)
+85.74
+90.75
+68.89
+79.82
+IConMoE (CAV-classifier)
+86.97
+91.43
+72.50
+81.97
+IConMoE (CAV-embedding)
+86.55
+91.37
+69.49
+80.43
+Table 5 compares standard fine-tuning, classifier-based ICon-
+MoE, and the proposed embedding-difference CAV method on both
+Politifact and Gossipcop. The results show that the classifier-free
+variant achieves performance close to the classifier-based CAV, out-
+performing the finetuned baseline by a significant margin. This
+formulation maintains the interpretability of the geometric direc-
+tion, while eliminating the need for separate classifiers. It also
+ensures consistent scaling across intents and simplifies deployment
+during multi-intent routing.
+5.7
+Layer-wise CAV intervention and
+interpretability study
+We injected the IConMoE architecture at different depths of the
+model to analyze where intent-sensitive representations most effec-
+tively influence misinformation detection. We inject our architec-
+ture at 1st layer, mid layer and last layer to judge the effectiveness
+Table 6: Layer-wise impact of CAV integration in IConMoE
+(T5-base) on Politifact and Snopes.
+Politifact
+Model Variant
+Acc.
+F1 (R)
+F1 (F)
+Macro F1
+IConMoE — last layer
+66.25
+67.21
+65.24
+66.22
+IConMoE — 1st layer
+62.92
+57.00
+67.40
+62.20
+IConMoE — 6th layer (mid)
+63.33
+59.63
+66.41
+63.02
+Snopes
+IConMoE — last layer
+77.25
+49.16
+85.35
+67.25
+IConMoE — 1st layer
+74.50
+50.49
+82.83
+66.66
+IConMoE — 6th layer (mid)
+75.25
+50.75
+83.47
+67.11
+of IConMoE architecture at different layers. Results in Tables 6
+and 9 indicates that adding IConMoE at the final layer consistently
+yields the best macro-F1 across both datasets and backbones. This
+suggests that high-level semantic activations near the output layer
+carry stronger decision cues than lower or mid-level linguistic ab-
+stractions.
+To quantify where internal prediction shifts occur, we measure
+the layer 𝑙∗at which the difference between real and fake prediction
+probabilities changes most sharply representing a decision flip
+within the model’s reasoning hierarchy:
+𝑙∗= arg max
+𝑙
+|𝛿𝑙−𝛿𝑙−1| ,
+(18)
+where 𝛿𝑙denotes the difference between fake and real logits at layer
+𝑙. Empirically, we observe that 𝑙∗predominantly yields a higher
+value at last layer and occasionally with the 0th layer. This suggests
+that intent-conditioned representations peak at the output layer
+where contextual and factual signals merge.
+6
+Conclusions and Future Prospects
+In this paper, we propose IConMoE, an intent-informed Concept
+Activation Vector (CAV)-based mixture-of-experts model designed
+to effectively capture intent mixtures underlying misinformation.
+IConMoE leverages precomputed concept vectors to model poten-
+tial intents without relying on large language model (LLM) infer-
+ences during training or inference, offering a highly efficient and
+scalable alternative to existing methods. Through evaluations on
+three widely-used benchmark datasets, IConMoE demonstrates
+significant performance improvements over both strong baselines
+and state-of-the-art models, all while maintaining an end-to-end,
+computationally light framework.
+In future work, we plan to investigate the interplay between
+emotions and intents in determining misinformation veracity. Ad-
+ditionally, we aim to extend our approach to multi-modal misinfor-
+mation detection, particularly by modeling intent representations
+in the image modality alongside those in text.
+References
+[1] Basant Agarwal, Ajay Agarwal, Priyanka Harjule, and Azizur Rahman. 2023.
+Understanding the intent behind sharing misinformation on social media. Journal
+of Experimental & Theoretical Artificial Intelligence 35, 4 (2023), 573–587.
+[2] Tian Bian, Xi Xiao, Tingyang Xu, Peilin Zhao, Wenbing Huang, Yu Rong, and
+Junzhou Huang. 2020. Rumor detection on social media with bi-directional
+graph convolutional networks. In Proceedings of the AAAI conference on artificial
+intelligence, Vol. 34. 549–556.
+1691
+
+
+
+===== PAGE 9 =====
+IConMoE: Modeling Intents of Misinformation using Concept Activation Vector-based Mixture of Experts
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+[3] Carlos Castillo, Marcelo Mendoza, and Barbara Poblete. 2011. Information credi-
+bility on twitter. In Proceedings of the 20th international conference on World wide
+web. 675–684.
+[4] Tong Chen, Xue Li, Hongzhi Yin, and Jun Zhang. 2018. Call attention to rumors:
+Deep attention based recurrent neural networks for early rumor detection. In
+Pacific-Asia conference on knowledge discovery and data mining. Springer, 40–52.
+[5] Hyung Won Chung, Le Hou, Shayne Longpre, Barret Zoph, Yi Tay, William Fedus,
+Yunxuan Li, Xuezhi Wang, Mostafa Dehghani, Siddhartha Brahma, et al. 2024.
+Scaling instruction-finetuned language models. Journal of Machine Learning
+Research 25, 70 (2024), 1–53.
+[6] Gheorghe Comanici, Eric Bieber, Mike Schaekermann, Ice Pasupat, Noveen
+Sachdeva, Inderjit Dhillon, Marcel Blistein, Ori Ram, Dan Zhang, Evan Rosen,
+et al. 2025. Gemini 2.5: Pushing the frontier with advanced reasoning, multi-
+modality, long context, and next generation agentic capabilities. arXiv preprint
+arXiv:2507.06261 (2025).
+[7] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. Bert:
+Pre-training of deep bidirectional transformers for language understanding. In
+Proceedings of the 2019 conference of the North American chapter of the association
+for computational linguistics: human language technologies, volume 1 (long and
+short papers). 4171–4186.
+[8] Nan Du, Yanping Huang, Andrew M Dai, Simon Tong, Dmitry Lepikhin,
+Yuanzhong Xu, Maxim Krikun, Yanqi Zhou, Adams Wei Yu, Orhan Firat, et al.
+2022. Glam: Efficient scaling of language models with mixture-of-experts. In
+International conference on machine learning. PMLR, 5547–5569.
+[9] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad
+Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Amy Yang, Angela Fan,
+et al. 2024. The llama 3 herd of models. arXiv e-prints (2024), arXiv–2407.
+[10] William Fedus, Barret Zoph, and Noam Shazeer. 2022. Switch transformers:
+Scaling to trillion parameter models with simple and efficient sparsity. Journal
+of Machine Learning Research 23, 120 (2022), 1–39.
+[11] Samarth Garg, Vivek Hruday Kavuri, Gargi Shroff, and Rahul Mishra. 2024. KTCR:
+Improving Implicit Hate Detection with Knowledge Transfer driven Concept
+Refinement. arXiv preprint arXiv:2410.15314 (2024).
+[12] Andreas Hanselowski, Avinesh PVS, Benjamin Schiller, Felix Caspelherr, De-
+banjan Chaudhuri, Christian M Meyer, and Iryna Gurevych. 2018. A retrospec-
+tive analysis of the fake news challenge stance detection task. arXiv preprint
+arXiv:1806.05180 (2018).
+[13] Pengcheng He, Xiaodong Liu, Jianfeng Gao, and Weizhu Chen. 2020.
+De-
+berta: Decoding-enhanced bert with disentangled attention.
+arXiv preprint
+arXiv:2006.03654 (2020).
+[14] Qihan Huang, Jie Song, Mengqi Xue, Haofei Zhang, Bingde Hu, Huiqiong Wang,
+Hao Jiang, Xingen Wang, and Mingli Song. 2024. Lg-cav: Train any concept acti-
+vation vector with language guidance. Advances in Neural Information Processing
+Systems 37 (2024), 39522–39551.
+[15] Dhruv Khattar, Jaipal Singh Goud, Manish Gupta, and Vasudeva Varma. 2019.
+Mvae: Multimodal variational autoencoder for fake news detection. In The world
+wide web conference. 2915–2921.
+[16] Ling Min Serena Khoo, Hai Leong Chieu, Zhong Qian, and Jing Jiang. 2020.
+Interpretable Rumor Detection in Microblogs by Attending to User Interactions.
+Proceedings of the AAAI Conference on Artificial Intelligence 34, 05 (Apr. 2020),
+8783–8790. doi:10.1609/aaai.v34i05.6405
+[17] Been Kim, Martin Wattenberg, Justin Gilmer, Carrie Cai, James Wexler, Fernanda
+Viegas, et al. 2018. Interpretability beyond feature attribution: Quantitative
+testing with concept activation vectors (tcav). In International conference on
+machine learning. PMLR, 2668–2677.
+[18] Pang Wei Koh, Thao Nguyen, Yew Siang Tang, Stephen Mussmann, Emma Pier-
+son, Been Kim, and Percy Liang. 2020. Concept bottleneck models. In International
+conference on machine learning. PMLR, 5338–5348.
+[19] Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, Dehao Chen, Orhan Firat,
+Yanping Huang, Maxim Krikun, Noam Shazeer, and Zhifeng Chen. 2020. Gshard:
+Scaling giant models with conditional computation and automatic sharding. arXiv
+preprint arXiv:2006.16668 (2020).
+[20] Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Mandar Joshi, Danqi Chen, Omer
+Levy, Mike Lewis, Luke Zettlemoyer, and Veselin Stoyanov. 2019. Roberta: A
+robustly optimized bert pretraining approach. arXiv preprint arXiv:1907.11692
+(2019).
+[21] Ilya Loshchilov and Frank Hutter. 2017. Decoupled weight decay regularization.
+arXiv preprint arXiv:1711.05101 (2017).
+[22] Jing Ma, Wei Gao, Prasenjit Mitra, Sejeong Kwon, Bernard J Jansen, Kam-Fai
+Wong, and Meeyoung Cha. 2016. Detecting rumors from microblogs with recur-
+rent neural networks. (2016).
+[23] Euna Mehnaz Khan, Ayush Ram, Bhavtosh Rath, Emily Vraga, and Jaideep Srivas-
+tava. 2023. Behavioral Forensics in Social Networks: Identifying Misinformation,
+Disinformation and Refutation Spreaders Using Machine Learning. arXiv e-prints
+(2023), arXiv–2305.
+[24] Rahul Mishra. 2020. Fake News Detection Using Higher-Order User to User
+Mutual-Attention Progression in Propagation Paths. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) Work-
+shops.
+[25] Rahul Mishra and Vinay Setty. 2019. SADHAN: Hierarchical Attention Net-
+works to Learn Latent Aspect Embeddings for Fake News Detection (ICTIR
+’19). Association for Computing Machinery, New York, NY, USA, 197–204.
+doi:10.1145/3341981.3344229
+[26] Qiong Nan, Qiang Sheng, Juan Cao, Beizhe Hu, Danding Wang, and Jintao Li. 2024.
+Let silence speak: Enhancing fake news detection with generated comments from
+large language models. In Proceedings of the 33rd ACM International Conference
+on Information and Knowledge Management. 1732–1742.
+[27] Aaron van den Oord, Yazhe Li, and Oriol Vinyals. 2018. Representation learning
+with contrastive predictive coding. arXiv preprint arXiv:1807.03748 (2018).
+[28] Nina Panickssery, Nick Gabrieli, Julian Schulz, Meg Tong, Evan Hubinger, and
+Alexander Matt Turner. 2023. Steering llama 2 via contrastive activation addition.
+arXiv preprint arXiv:2312.06681 (2023).
+[29] Kashyap Popat, Subhabrata Mukherjee, Andrew Yates, and Gerhard Weikum.
+2018. Declare: Debunking fake news and false claims using evidence-aware deep
+learning. arXiv preprint arXiv:1809.06416 (2018).
+[30] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang,
+Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. 2020. Exploring the limits
+of transfer learning with a unified text-to-text transformer. Journal of machine
+learning research 21, 140 (2020), 1–67.
+[31] Hannah Rashkin, Eunsol Choi, Jin Yea Jang, Svitlana Volkova, and Yejin Choi.
+2017. Truth of varying shades: Analyzing language in fake news and political
+fact-checking. In Proceedings of the 2017 conference on empirical methods in natural
+language processing. 2931–2937.
+[32] Nils Reimers and Iryna Gurevych. 2019. Sentence-bert: Sentence embeddings
+using siamese bert-networks. arXiv preprint arXiv:1908.10084 (2019).
+[33] Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc Le,
+Geoffrey Hinton, and Jeff Dean. 2017. Outrageously large neural networks: The
+sparsely-gated mixture-of-experts layer. arXiv preprint arXiv:1701.06538 (2017).
+[34] Kai Shu, Amy Sliva, Suhang Wang, Jiliang Tang, and Huan Liu. 2017. Fake news
+detection on social media: A data mining perspective. ACM SIGKDD explorations
+newsletter 19, 1 (2017), 22–36.
+[35] Gemma Team, Thomas Mesnard, Cassidy Hardin, Robert Dadashi, Surya Bhupati-
+raju, Shreya Pathak, Laurent Sifre, Morgane Rivière, Mihir Sanjay Kale, Juliette
+Love, et al. 2024. Gemma: Open models based on gemini research and technology.
+arXiv preprint arXiv:2403.08295 (2024).
+[36] Nguyen Vo and Kyumin Lee. 2020. Where are the facts? searching for fact-checked
+information to alleviate the spread of fake news. arXiv preprint arXiv:2010.03159
+(2020).
+[37] Soroush Vosoughi, Deb Roy, and Sinan Aral. 2018. The spread of true and false
+news online. science 359, 6380 (2018), 1146–1151.
+[38] Bing Wang, Ximing Li, Changchun Li, Bo Fu, Songwen Pei, and Shengsheng
+Wang. 2024. Why misinformation is created? detecting them by integrating intent
+features. In Proceedings of the 33rd ACM International Conference on Information
+and Knowledge Management. 2304–2314.
+[39] Yaqing Wang, Fenglong Ma, Zhiwei Jin, Ye Yuan, Guangxu Xun, Kishlay Jha, Lu
+Su, and Jing Gao. 2018. Eann: Event adversarial neural networks for multi-modal
+fake news detection. In Proceedings of the 24th acm sigkdd international conference
+on knowledge discovery & data mining. 849–857.
+[40] Zhengjia Wang, Qiang Sheng, Danding Wang, Beizhe Hu, and Juan Cao. 2025.
+Bridging Thoughts and Words: Graph-Based Intent-Semantic Joint Learning for
+Fake News Detection. arXiv preprint arXiv:2509.01660 (2025).
+[41] Thomas D Wilson and Elena Maceviciute. 2022. Information misbehaviour:
+modelling the motivations for the creation, acceptance and dissemination of
+misinformation. Journal of Documentation 78, 7 (2022), 485–505.
+[42] Liang Xiao, Qi Zhang, Chongyang Shi, Shoujin Wang, Usman Naseem, and Liang
+Hu. 2024. Msynfd: Multi-hop syntax aware fake news detection. In Proceedings
+of the ACM web conference 2024. 4128–4137.
+[43] Weizhi Xu, Junfei Wu, Qiang Liu, Shu Wu, and Liang Wang. 2022. Evidence-
+aware fake news detection with graph neural networks. In Proceedings of the
+ACM web conference 2022. 2501–2510.
+[44] Hanyu Zhang, Xiting Wang, Chengao Li, Xiang Ao, and Qing He. 2025. Control-
+ling large language models through concept activation vectors. In Proceedings of
+the AAAI Conference on Artificial Intelligence, Vol. 39. 25851–25859.
+[45] Xinyi Zhou, Kai Shu, Vir V Phoha, Huan Liu, and Reza Zafarani. 2022. “this
+is fake! shared it by mistake”: Assessing the intent of fake news spreaders. In
+Proceedings of the ACM web conference 2022. 3685–3694.
+[46] Yongchun Zhu, Qiang Sheng, Juan Cao, Shuokai Li, Danding Wang, and Fuzhen
+Zhuang. 2022. Generalizing to the future: Mitigating entity bias in fake news
+detection. In Proceedings of the 45th International ACM SIGIR Conference on
+Research and Development in Information Retrieval. 2120–2125.
+1692
+
+
+
+===== PAGE 10 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Atul Kumar Singh and Rahul Mishra
+A
+Appendix
+A.1
+Dataset statistics
+Table containing the dataset statistics of politifact, snopes and gos-
+sipcop:
+Table 7: Dataset statistics showing the number of real and
+fake instances across train, validation, and test splits.
+Dataset
+Train
+Validation
+Test
+Fake
+Real
+Fake
+Real
+Fake
+Real
+GossipCop
+2,024
+5,039
+604
+1,774
+601
+1,758
+PolitiFact
+1,074
+939
+136
+114
+134
+118
+Snopes
+2,343
+888
+269
+131
+293
+107
+A.2
+Gossipcop ablation study
+Table 8: Ablation Study: Comparison of IConMoe Variants
+on Politifact and Gossipcop.
+Gossipcop
+Variant
+Acc
+F1 (R)
+F1 (F)
+Macro F1
+IConMoE
+86.97
+91.43
+72.50
+81.97
+IConMoE w/o KL
+86.89
+91.46
+71.83
+81.64
+IConMoE w/o Cons
+86.38
+91.30
+68.68
+79.99
+IConMoE Top2 routing
+86.93
+91.56
+71.49
+81.53
+IConMoE w/o Shared
+86.47
+91.32
+69.36
+80.34
+IConMoE w/o Experts
+85.62
+90.44
+71.00
+80.72
+IConMoE 1-Intent
+85.83
+90.48
+72.31
+81.39
+A.3
+Detailed description of Baselines
+We compare IConMoE against both general-purpose models and
+specialized MD methods. In particular, DM-Inter is our primary
+baseline due to its close design goals. Below is a brief description
+of each:
+• BERT [7] : A transformer-based encoder pretrained via masked
+language modeling and next-sentence prediction which is
+widely used in text classification.
+• T5 (base/large) [30] : A text-to-text transformer that can be
+fine-tuned for classification tasks. We include both T5-base
+and T5-large to test capacity effects.
+• LLaMA-3.1 (8B)[9] : large-scale LLM evaluated in in-context
+learning (ICL), intent-augmented (LLM-Int), and fine-tuning
+settings. To ensure computational efficiency, we fine-tune
+only its final classification layer.
+• DM-Inter[38] : A self-supervised intent-intervention frame-
+work where generator is trained to output binary intent
+predictions, which are sharpened and integrated with news
+embeddings for veracity judgment.
+• EANN [39] : Learns event-invariant representations using
+adversarial training, aiming to reduce event-based biases in
+news misinformation.
+• MDFEND[26] : Employs a mixture-of-experts paradigm to
+account for domain variation in news to maintain cross-
+domain robustness.
+• BERT-Emo [45] : Enhances a BERT-based model with emo-
+tional features to capture affective signals useful in misin-
+formation.
+• ENDEF [46] : Introduces entity-based debiasing to reduce
+the influence of highly frequent entities in news that may
+skew detection.
+• MGIN-AG [43] : Combines syntactic dependency graphs with
+BERT, leveraging graph structure to augment representation
+for detection.
+• MSynFD[42] : Builds multi-hop syntactic dependency graphs
+over news tokens to integrate syntax-aware signals for im-
+proved detection.
+• GenFEND[26] : Generates synthetic user comment feedback
+via LLM prompts, aggregates them, and uses them to enhance
+misinfo detection.
+A.4
+Implementation Details
+All experiments were implemented using the Hugging Face Trans-
+formers library with AdamW [21] as the optimizer and a cosine
+annealing schedule with 100 warm-up steps. We trained for 5 epochs
+with a batch size of 8, a learning rate of 1e-6, and weight decay set
+to 0.01. Mixed precision (FP16) was disabled to avoid training insta-
+bilities, though BF16 can be adopted on supported hardware. We
+evaluated our approach across four strong pretrained backbones:
+FLAN-T5-Base and FLAN-T5-Large [5], Google/Gemma-7B [35],
+and Meta-LLaMA-3.1-8B [9]. For intent-aware modeling, we first
+obtained intent embeddings using the all-MiniLM-L6-v2 encoder
+[32], and then determined the closest intent for each claim by com-
+puting cosine similarity between the claim and intent vectors. All
+experiments were conducted on NVIDIA H100 GPUs with at 90GB
+memory.
+A.5
+Layer-wise CAV intervention and
+interpretability study
+Layer-wise impact of IConMoE integration in LLaMA-8B on Politi-
+fact and Snopes. This shows integrating integrating IConMoE in
+last layer shows most advantage.
+Table 9: Layer-wise impact of CAV integration in IConMoE
+(LLaMA-8B) on Politifact and Snopes.
+Politifact
+Model Variant
+Acc.
+F1 (R)
+F1 (F)
+Macro F1
+IConMoE — last layer
+63.33
+65.62
+60.71
+63.16
+IConMoE — 1st layer
+62.92
+55.72
+68.10
+61.91
+IConMoE — 15th layer (mid)
+61.67
+43.31
+71.00
+57.11
+Snopes
+Model Variant
+Acc.
+F1 (R)
+F1 (F)
+Macro F1
+IConMoE — last layer
+71.75
+55.69
+79.27
+67.48
+IConMoE — 1st layer
+69.25
+39.41
+79.40
+59.40
+IConMoE — 15th layer (mid)
+71.00
+10.77
+82.69
+46.73
+1693
+
+
+
+===== PAGE 11 =====
+IConMoE: Modeling Intents of Misinformation using Concept Activation Vector-based Mixture of Experts
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Figure 3: Effect of contrastive loss (𝜆) and KL regularization (𝛽) on Snopes and Politifact datasets.
+A.6
+Hyperparameter analysis
+We further investigate the sensitivity of IConMoe to the weighting
+of auxiliary objectives, namely the contrastive consistency loss (𝜆)
+and the KL regularization loss (𝛽). Figures 3 report the effect of vary-
+ing 𝜆and 𝛽in the range [0.2, 1.0] on Snopes and Politifact datasets.
+We observe that as 𝜆approaches 1.0, both accuracy and macro F1
+consistently improve on Snopes, reaching the highest scores when
+the contrastive term dominates. A similar upward trend is visible for
+Politifact, where performance peaks around 𝜆= 0.6 before plateau-
+ing. These results indicate that the contrastive term is crucial for
+stabilizing expert separation by pushing apart conflicting intents. In
+contrast, increasing 𝛽has a diminishing effect on performance. On
+Snopes and politifact, both accuracy and macro F1 steadily decline
+as 𝛽grows, indicating that excessive regularization over-constrains
+expert routing.
+A.7
+Intent dataset example
+Factual Claims (No In-
+tent)
+Misinformation Claims
+(With Intent)
+Taylor Swift has one of
+the largest fanbases among
+singers.
+Taylor Swift is helping
+fans become financially free
+with this simple trick. (Fi-
+nancial exploitation)
+Face masks help protect
+people from viruses.
+Wearing
+face
+masks
+causes lung cancer, stop
+using them immediately.
+(Harm/Panic)
+Taking breaks during work
+can reduce stress and im-
+prove productivity.
+Government
+introduces
+‘Nap Hour’ between 2 and
+3 PM in all workplaces.
+(Political Manipulation)
+Table 10: Samples from intent dataset for CAV computation
+A.8
+Prompts for intent example generation and
+analysis
+To construct intent-specific positive and negative samples, we use
+the following prompt to generate synthetic claim pairs with a large
+language model. Each pair consists of two short claims on the same
+fictional topic and in a similar writing style.
+Generate two short fictional claims on the same made-
+up topic and in the same style.
+Intent: {political manipulation | financial exploita-
+tion | ideological/religious indoctrination | social/psychological
+manipulation | malicious harm or panic | satire/parody
+misinterpreted}
+Positive (x+): A fictional false claim that clearly ex-
+presses the given intent.
+Negative (x−): A fictional neutral or factual claim on
+the same topic that does not express the intent.
+Do not use real people, organizations, places, or events.
+Label each output as Positive (x+) or Negative (x−).
+A.9
+Error analysis
+A.10
+CAV generated using other LLMs
+To evaluate the robustness of IConMoE to the choice of LLM used
+for intent dataset construction, we generate Concept Activation
+Vectors (CAVs) using intent samples produced by ChatGPT instead
+of Gemini. As shown in Table 12, IConMoE maintains comparable
+performance across both CAV sources, with only a marginal drop
+when using ChatGPT-based CAVs. This indicates that our frame-
+work is not sensitive to a specific LLM and benefits primarily from
+the intent-informed CAV formulation rather than the generator
+model. Gemini-2.5 produced most consistent and least stylistically
+biased examples.
+A.11
+Varying number of intent
+We study the impact of intent granularity by varying the number
+of intent categories k. Results in Table 13 show that performance
+degrades gradually as k decreases, with the full six-intent setting
+achieving the best results. This suggests that a compact yet suf-
+ficiently expressive intent taxonomy is important for capturing
+diverse misinformation strategies, while fewer intents limit the
+model’s ability to disentangle semantic intent signals.
+A.12
+Ethics statement
+This work uses large language models (LLMs) solely to generate
+synthetic misinformation examples for offline concept extraction.
+These samples are used only to compute intent-specific Concept
+Activation Vectors (CAVs) and are never included in model training,
+evaluation, deployment, or public release.
+All generation is constrained by strict safety and content modera-
+tion settings, ensuring that samples remain abstract, non-operational,
+and do not reference real events, provide instructions, or target
+individuals or groups. Generated data are stored locally and deleted
+after concept computation.
+The proposed IConMoE framework does not require LLM infer-
+ence during training or inference, minimizing risks of unintended
+1694
+
+
+
+===== PAGE 12 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Atul Kumar Singh and Rahul Mishra
+Table 11: Error analysis of IConMoE illustrating how intent combinations and router dynamics influence prediction outcomes.
+Each column shows a representative claim with gold label, detected intents, and reasoning behaviour.
+Aspect
+Claim 1: Refugees from neighboring
+state of the country are being paid to
+protest in capital city rallies.
+Claim 2: The government banned
+diesel cars to force citizens into buy-
+ing expensive electric vehicles owned
+by foreign companies.
+Claim 3: Barack Obama says Medicare
+and Medicaid are the single biggest dri-
+vers of the federal deficit and the federal
+debt by a huge margin.
+Gold Label
+Fake
+Fake
+Real
+Top Intents (Router Se-
+lection)
+Political manipulation, Social manipula-
+tion
+Satire/Parody, Political manipulation,
+Financial exploitation
+Political manipulation, Financial ex-
+ploitation
+Model Behaviour and In-
+ternal Dynamics
+The
+router
+activates
+high
+gating
+weights for political and social ma-
+nipulation, allowing specialist experts
+to capture the coordinated hostility
+narrative. The expert attention maps
+align with causal verbs like “paid” and
+“protest,” enabling confident discrimina-
+tion of synthetic fear appeals.
+Although the claim is correctly classi-
+fied as fake, the router over-weights the
+Satire/Parody expert despite the lack of
+humor markers. The joint contribution
+from political and financial manipula-
+tion dominates, yielding the correct pre-
+diction through cross-intent reinforce-
+ment.
+The router misfires by over-activating
+manipulation intents, mapping fiscal
+terms (deficit, debt) to exploitative fram-
+ing. Lack of evidential grounding causes
+the shared expert’s corrective signal to
+be downweighted, leading to a false pos-
+itive.
+Analysis and Insight
+Captures fine-grained intent alignment
+and contextual hostility cues. Strength
+lies in disentangling overlapping manip-
+ulation signals that amplify fake fram-
+ing.
+Shows robustness to partial intent mis-
+match, leveraging mixture gating to sta-
+bilize cross-intent dependencies. Sug-
+gests the model’s capacity for redun-
+dancy in expert reasoning.
+Highlights
+failure
+case
+of
+over-
+activation bias, where factual but
+politically charged content mimics
+manipulative tone. Points to need for
+better calibration between shared and
+intent-specific experts.
+Table 12: Comparison of fine-tuned, gemini-based dataset
+CAV and ChatGPT based dataset CAV
+Politifact
+Model
+Acc
+F1(R)
+F1(F)
+Macro F1
+Finetune (T5-base)
+59.17
+51.49
+64.75
+58.12
+IConMoE (CAV-Gemini)
+66.25
+67.21
+65.24
+66.22
+IConMoE (CAV-ChatGPT)
+65.00
+65.05
+65.08
+64.99
+Table 13: Comparison of IConMoE by varying the number of
+intents
+Politifact
+Model
+Acc
+F1(R)
+F1(F)
+Macro F1
+IConMoE(k=6)
+66.25
+67.21
+65.24
+66.22
+IConMoE(k=5)
+65.00
+64.90
+64.87
+64.88
+IConMoE(k=4)
+64.17
+64.10
+64.12
+64.10
+content generation in deployment. The method is designed ex-
+clusively for improving misinformation detection and aligns with
+responsible AI practices and ACM ethical guidelines.
+1695

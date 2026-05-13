@@ -1,0 +1,1827 @@
+
+
+===== PAGE 1 =====
+PAMAS: Self-Adaptive Multi-Agent System with Perspective
+Aggregation for Misinformation Detection
+Zongwei Wang
+zongwei@cqu.edu.cn
+Chongqing University
+Chongqing, China
+Min Gao∗†
+gaomin@cqu.edu.cn
+Chongqing University
+Chongqing, China
+Junliang Yu
+junl.yu@outlook.com
+Griffith University
+Brisbane, Australia
+Tong Chen
+tong.chen@uq.edu.au
+The University of Queensland
+Brisbane, Australia
+Chenghua Lin
+chenghua.lin@manchester.ac.uk
+University of Manchester
+Manchester, United Kingdom
+Abstract
+Misinformation on social media poses a critical threat to informa-
+tion credibility, as its diverse and context-dependent nature com-
+plicates detection. Large language model–empowered multi-agent
+systems (MAS) present a promising paradigm that enables coop-
+erative reasoning and collective intelligence to combat this threat.
+However, conventional MAS suffer from an information-drowning
+problem, where abundant truthful content overwhelms sparse and
+weak deceptive cues. With full input access, agents tend to focus on
+dominant patterns, and inter-agent communication further ampli-
+fies this bias. To tackle this issue, we propose PAMAS, a multi-agent
+framework with perspective aggregation, which employs hierarchi-
+cal, perspective-aware aggregation to highlight anomaly cues and
+alleviate information drowning. PAMAS organizes agents into three
+roles: Auditors, Coordinators, and a Decision-Maker. Auditors cap-
+ture anomaly cues from specialized feature subsets; Coordinators
+aggregate their perspectives to enhance coverage while maintaining
+diversity; and the Decision-Maker, equipped with evolving memory
+and full contextual access, synthesizes all subordinate insights to
+produce the final judgment. Furthermore, to improve the efficiency
+in multi-agent collaboration, PAMAS incorporates self-adaptive
+mechanisms for dynamic topology optimization and routing-based
+inference, enhancing both efficiency and scalability. Extensive ex-
+periments on multiple benchmark datasets demonstrate that PA-
+MAS achieves superior accuracy and efficiency, offering a scalable
+and trustworthy way for misinformation detection.
+CCS Concepts
+• Computing methodologies →Natural language processing.
+∗Corresponding author. The code is available at https://github.com/CoderWZW/
+PAMAS
+†Also with Key Laboratory of Dependable Service Computing in Cyber Physical
+Society (Chongqing University), Ministry of Education of China.
+This work is licensed under a Creative Commons Attribution 4.0 International License.
+WWW ’26, Dubai, United Arab Emirates
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN *************
+https://doi.org/**********
+Keywords
+Multi-Agent Systems, Large Language Models, Misinformation De-
+tection, Agents
+ACM Reference Format:
+Zongwei Wang, Min Gao, Junliang Yu, Tong Chen, and Chenghua Lin. 2026.
+PAMAS: Self-Adaptive Multi-Agent System with Perspective Aggregation
+for Misinformation Detection. In Proceedings of the ACM Web Conference
+2026 (WWW ’26), April 13–17, 2026, Dubai, United Arab Emirates. ACM, New
+York, NY, USA, 12 pages. https://doi.org/**********
+1
+Introduction
+Misinformation on social media has emerged as a serious threat
+to information credibility. It manifests in diverse forms, such as
+fake user accounts [33], deceptive product reviews [39], and ma-
+nipulated news [23], all of which distort public perceptions and
+erode trust in digital ecosystems. To contain these risks, in the early
+stages, platforms primarily relied on human auditors to identify and
+remove harmful content. Yet as platforms expand and the volume
+of user-generated content grows exponentially, the capacity of hu-
+man auditors alone is quickly outpaced [3]. Deep learning models
+have therefore been adopted to assist auditors, but their opaque
+decisions often lack interpretability and fail to provide credible
+explanations [22, 32]. As a result, auditors still need to re-examine
+many cases to ensure accountability, which further increases their
+workload, leaving large amounts of harmful content unchecked.
+Given these limitations, large language models (LLMs) provide
+new avenues for improving content moderation [12, 29]. Unlike con-
+ventional deep learning models, LLMs exhibit strong reasoning and
+contextual understanding capabilities, enabling more transparent
+and interpretable decisions [1, 2]. Building upon these strengths,
+recent research shows that multi-agent systems (MAS) can out-
+perform single agents on complex tasks by fostering cooperative
+reasoning across diverse collaboration topologies [27], such as
+chain [19], star [37], tree [8], graph [43], layer [45], and temporal
+structure [14]. These advances naturally motivate MAS frameworks
+that collaborate with human auditors, where LLM-based agents
+not only generate automated judgments but also offer interpretable
+reasoning to support human oversight.
+However, conventional MAS suffer from an information-drowning
+problem in misinformation detection, where abundant truthful con-
+tent overwhelms sparse, fragmented and weak deceptive signals. As
+illustrated in Fig. 1a, existing MAS typically expose each agent to
+arXiv:2602.03158v1  [cs.IR]  3 Feb 2026
+
+
+
+===== PAGE 2 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Zongwei Wang, Min Gao, Junliang Yu, Tong Chen & Chenghua Lin
+Star
+Temporal
+Misinformation
+Profile 
+Full-Context 
+Overexposure
+Misinformation Is Detected As 
+Truthful Information 
+Agent-to-Agent 
+Mutual Influence
+Chain
+Tree
+Graph
+Layer
+(a) Existing MAS suffer from the information-drowning problem. The agents
+marked by red dashed boxes may initially detect anomalies, but their signals
+are later overwhelmed and disappear during aggregation.
+Misinformation
+Profile 
+Misinformation 
+Is Successfully Detected
+Hierarchical 
+Perspective-Aware 
+Aggregation
+Feature1
+Feature2
+Feature3
+Feature5
+Feature4
+Feature6
+Auditor
+Coordinators 
+Decision-Maker
+Feature
+Decomposition
+(b) Multi-Agent System with Perspective Aggregation (PAMAS). The agents
+marked by red dashed boxes detect anomaly cues that are preserved and trans-
+mitted to the Decision-Maker for the final correct judgment.
+Figure 1: Comparison between the existing MAS design and
+our proposed PAMAS.
+the complete input context of the target information to ensure com-
+prehensive reasoning, yet this approach inadvertently amplifies the
+dominance of normal signals, causing agents to converge toward
+overly benign decisions. The problem is further intensified dur-
+ing agent-to-agent communication and debates, where correlated
+judgments reinforce one another, suppressing minority anomaly
+evidence and leaving misinformation even more deeply concealed.
+To overcome the information-drowning problem, we design PA-
+MAS, a novel MAS framework with Perspective Aggregation for
+misinformation detection, which employs hierarchical perspective-
+aware aggregation to actively highlight anomaly cues and mitigate
+information drowning. As shown in Fig. 1b, the information is first
+decomposed in a perspective-aware manner, where different feature
+subsets are extracted to emphasize distinct aspects of the content.
+Building on these specialized perspectives, PAMAS progressively
+aggregates the resulting judgments through a hierarchical structure
+of three roles, including Auditors, Coordinators, and a Decision-
+Maker. Auditors serve as the first layer of observation, each spe-
+cializing in a specific feature subset to capture amplified anomalies.
+Their independent perspectives ensure diversity in detection and
+prevent the dominance of any single interpretation. Coordinators
+operate at the intermediate level, each responsible for supervis-
+ing a subset of Auditors and integrating their reports into more
+comprehensive judgments. Through localized aggregation, they
+broaden the analytical scope while preserving the independence
+of underlying Auditor outputs, ensuring that amplified anomaly
+cues are retained through intermediate reasoning. At the top of
+the hierarchy, the Decision-Maker synthesizes its own direct judg-
+ment with the refined insights from all Coordinators. Equipped
+with self-evolving memory and full contextual access, it continu-
+ously enhances its reasoning capability, reconciles conflicting views
+across subordinates, preserves minority yet high-risk signals, and
+delivers the final decision.
+Although this hierarchical perspective-aware aggregation en-
+hances robustness in misinformation detection, operating PAMAS
+under conventional optimization and inference mechanisms would
+be both time-consuming and token-intensive. On the one hand,
+within each layer, every agent of the same role independently per-
+forms judgments, leading to repeated LLM calls and redundant
+token consumption. On the other hand, across layers, complex inter-
+agent interactions require extensive exchanges of inputs and out-
+puts, further increasing inference time and token usage. To improve
+efficiency, we enhance PAMAS with self-adaptive mechanisms at
+both the optimization and inference stages, enabling the system to
+dynamically adjust its topology and refine agent capabilities over
+training. In the optimization stage, a topology adaptation strategy
+prunes redundant or overly similar agents to reduce wasted com-
+putation, while introducing new agents when existing structures
+exhibit correlated failures; subsequently, a targeted correction strat-
+egy enables misclassification-driven self-improvement, where only
+agents responsible for erroneous judgments are updated: Auditors
+refine their memory to improve localized experience, Coordinators
+adjust trust weights over their supervised subordinates, and the
+Decision-Maker consolidates these refinements into higher-level
+experiential guidance to prevent repeated mistakes. In the inference
+stage, a confidence-guided routing strategy selectively activates
+the most reliable branches instead of traversing the entire hierar-
+chy, thereby substantially lowering computational overhead while
+preserving decision quality.
+The contributions of this paper are four-fold:
+• To the best of our knowledge, we are the first to systematically
+incorporate LLM-empowered MAS into misinformation detection
+and reveal the inherent information-drowning problem within
+this setting.
+• We propose PAMAS, which performs hierarchical perspective-
+aware aggregation to amplify anomaly cues and consolidate het-
+erogeneous judgments.
+• We design efficiency-oriented self-adaptive strategies for PAMAS,
+including dynamic topology adaptation, targeted agent refine-
+ment, and confidence-guided routing, which jointly improve the
+effectiveness and scalability.
+• We extensively validate our method across multiple benchmark
+datasets covering diverse misinformation scenarios, including
+abnormal users, misleading reviews, and fake news, where our
+method consistently outperforms strong baselines in terms of
+accuracy, efficiency, and interpretability.
+2
+Preliminaries
+We begin by formalizing the setting of a single agent for misinfor-
+mation detection. Each agent 𝑎is equipped with three essential
+components: a profile P𝑎that defines its persona and perspective
+for making judgments, a memory M𝑎that records its historical
+experiences and past decisions, and a reasoning function 𝜙𝑎that
+performs inference.
+Given an input instance 𝑥∈X, agent 𝑎produces a binary judg-
+ment and an associated explanation:
+(𝑑𝑎,𝑟𝑎) ∼𝜙𝑎(𝑥, P𝑎, M𝑎),
+(1)
+
+
+
+===== PAGE 3 =====
+PAMAS: Self-Adaptive Multi-Agent System with Perspective Aggregation for Misinformation Detection
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+where 𝑑𝑎∈{0, 1} indicates whether 𝑥is classified as misinforma-
+tion, and 𝑟𝑎∈R is the natural-language explanation.
+Then, we extend to a multi-agent system A = {𝑎1,𝑎2, . . . ,𝑎𝑚},
+in which agents operate with heterogeneous profiles and distinct
+memories. Importantly, agents are not isolated: there exist relations
+among them such that the output of certain agents becomes part
+of the input to others.
+Formally, if 𝑎𝑗is related to a set of agents N (𝑗) ⊆A, then 𝑎𝑗
+takes into account both the external input 𝑥and the results of all
+related agents when performing inference:
+(𝑑𝑎𝑗,𝑟𝑎𝑗) ∼𝜙𝑎𝑗
+
+𝑥, {(𝑑𝑎𝑘,𝑟𝑎𝑘) | 𝑎𝑘∈N (𝑗)}, P𝑎𝑗, M𝑎𝑗
+
+.
+(2)
+At the system level, the collective inference function Φ aggre-
+gates the outputs of multiple agents:
+(𝐷, 𝑅) ∼Φ {(𝑑𝑎𝑗,𝑟𝑎𝑗)}𝑚
+𝑗=1
+,
+(3)
+yielding the decision 𝐷∈{0, 1} and a synthesized explanation 𝑅.
+3
+PAMAS: Self-Adaptive Multi-Agent System
+with Perspective Aggregation
+In this section, we introduce the PAMAS, which hierarchically
+organizes agents and aggregates their perspectives through a self-
+adaptive mechanism, thereby enhancing robustness and efficiency
+in misinformation detection. We first describe the distinct responsi-
+bilities of these roles (Sec. 3.1), followed by the system initializa-
+tion and topology construction (Sec. 3.2), and the proposed self-
+adaptive strategies applied during optimization (Sec. 3.3) and infer-
+ence (Sec. 3.4). The corresponding prompt designs used in PAMAS
+are provided in Appendix B.
+3.1
+Agent Roles
+PAMAS organizes agents into clear relations across three roles:
+Auditors, Coordinators, and a Decision-Maker.
+3.1.1
+Auditor. Auditors are the fundamental detection units, and
+also serve as the basic building block of the input layer in PAMAS.
+To ensure diversity of perspectives, we extract multiple dimensions
+of characteristics from each instance to be examined (e.g., statistical
+ratings, textual semantics such as sentiment polarity or consistency
+across statements, and temporal dynamics). Each Auditor 𝐴is as-
+signed a distinct profile P𝐴, which restricts its observation to a
+particular subset of characteristics rather than the full set of di-
+mensions. By doing so, different Auditors develop complementary
+profiles, each focusing on specific aspects of the target detected
+information. More details on the characteristic dimensions used for
+profiling Auditors are provided in Appendix D.
+The memory of an Auditor 𝐴is divided into two components:
+- Experience memory Mexp
+𝐴, which summarizes detection expe-
+rience distilled from accumulated cases. This forms the agent’s
+evolving knowledge base for identifying misinformation.
+- Action memory Mact
+𝐴, which logs the concrete decisions the
+agent has made on past inputs, together with the reasoning state-
+ments that supported them. This enables backtracking of how spe-
+cific judgments were reached.
+Auditor Memories
+Experience memory sample: “Misinformation accounts
+often reuse identical textual templates across items while
+maintaining abnormally high sentiment intensity.”
+Action memory sample: {user_id: 1327, decision: 1,
+reason: “reviews are excessively repetitive and sentimen-
+tally exaggerated”}
+Given an input 𝑥, the Auditor produces a decision–reason pair:
+(𝑑𝐴,𝑟𝐴) ∼𝜙𝐴(𝑥, P𝐴, Mact
+𝐴, Mexp
+𝐴),
+(4)
+where 𝑑𝐴∈{0, 1} is the predicted label, and 𝑟𝐴∈R is the explana-
+tion. The output (𝑑𝐴,𝑟𝐴) is simultaneously stored in action memory
+for accountability.
+3.1.2
+Coordinator. A Coordinator acts as the intermediate orga-
+nizer, considering outputs from subordinate Auditors or lower-level
+Coordinators, and structurally corresponds to the hidden layer of
+PAMAS. While Auditors are responsible for making first-order
+judgments from restricted feature subsets, Coordinators focus on
+aggregating these heterogeneous perspectives into more reliable
+decisions. This hierarchical relationship ensures that anomaly cues
+identified by individual Auditors are properly amplified, and con-
+solidated before being passed upward for higher-level reasoning.
+The memory of a Coordinator 𝐶is divided into two components:
+- Confidence memory Mconf
+𝐶
+, which records the trust weights
+𝑤𝑗assigned to each subordinate. These weights evolve with op-
+timization, reflecting the reliability of different subordinates over
+time.
+- Action memory Mact
+𝐶, which logs the aggregated decisions made
+by 𝐶, along with the subordinate votes that contributed to them.
+Coordinator Memories
+Confidence memory sample: {subordinate_id: 2,
+weight: 0.73; subordinate_id: 15, weight: 0.41 }
+Action memory sample: { decision: 1, votes: [ (1,0.73),
+(0,0.41) ] }
+Given subordinate outputs {(𝑑𝑗,𝑟𝑗)}, the Coordinator aggregates
+them by weighted voting:
+𝑑𝐶= I
+
+∑︁
+𝑗∈S(𝐶)
+𝑤𝑗· (2𝑑𝑗−1) > 0
+
+,
+(5)
+where S(𝐶) is the subordinates of Coordinator 𝐶, and stores both
+the decision and vote distribution into its action memory.
+Coordinators can themselves be recursively organized into mul-
+tiple layers, whose depth can be flexibly adjusted to fit task com-
+plexity, forming a scalable hierarchy. At the top of this hierarchy,
+the highest-level Coordinator interacts directly with the Decision-
+Maker, which synthesizes the final decision.
+3.1.3
+Decision-Maker. At the top of the hierarchy, the Decision-
+Maker serves as the final arbiter, synthesizing its own direct judg-
+ment 𝜙𝐷(𝑥) with the aggregated outputs of all top-level Coordina-
+tors. It maintains three memories: confidence memory Mconf
+𝐷
+toward
+Coordinators, experience memory Mexp
+𝐷
+distilled from repeated in-
+teractions, and action memory Mact
+𝐷archiving final decisions and
+
+
+
+===== PAGE 4 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Zongwei Wang, Min Gao, Junliang Yu, Tong Chen & Chenghua Lin
+Auditor
+Result
+Result
+Refine
+Decision-Maker 
+Self-Learning
+Retrieve
+Auditor 
+Assignment
+Optimization
+N ×
+Sub-Features
+Profiles 
+Result
+Inference
+0.8
+0.9
+0.8
+0.6
+Selected
+Unselected
+0.9
+0.9
+0.8
+0.5
+0.9
+0.8
+0.9
+0.8
+0.9
+0.9
+0.5
+0.8
+0.9
+0.8
+Action Memory
+Experience Memory
+Decision
+-Maker
+Action Memory
+Confidence Memory
+Action Memory
+Experience Memory
+Confidence Memory
+Coordinator
+Initialization
+Forward Pass
+Backward 
+Targeted Correction
+Topology Adaptation
+Prune Member
+Expand Member
+Confidence-Guided 
+Routing
+Experience 
+Relation 
+Construction
+Figure 2: The framework of PAMAS, including the process of initialization, optimization, and inference.
+supporting reasons. Its inference rule is defined as:
+(𝑑𝐷,𝑟𝐷) ∼𝜙𝐷
+
+𝑥, {(𝑑𝐶𝑘,𝑟𝐶𝑘, 𝛼𝑘)}𝑘, P𝐷, Mconf
+𝐷
+, Mexp
+𝐷, Mact
+𝐷
+
+, (6)
+where (𝑑𝐶𝑘,𝑟𝐶𝑘, 𝛼𝑘) are the outputs and trust weights of top-level
+Coordinators. Since a Coordinator does not independently generate
+reasoning, 𝑟𝐶𝑘is inherited from its subordinates and taken as the
+explanation provided by the highest-weight Auditor whose decision
+aligns with the Coordinator’s aggregated output.𝜙𝐷combines them
+with the Decision-Maker’s profile P𝐷and memories to yield the
+final decision 𝑑𝐷and explanation 𝑟𝐷. Here, P𝐷specifies the task
+of the Decision-Maker integrating all highest-level Coordinator
+outputs while leveraging the full set of dimensions and accumulated
+memories to derive the final judgment.
+3.2
+Initialization of PAMAS
+Although the three roles are defined, how to initialize these agents
+and how to determine the relations between agents remain unre-
+solved. This section describes the initialization of PAMAS. At first,
+all memories are created in empty form, and all trust weights (e.g.,
+confidence weights 𝛼𝑘between superiors and subordinates) are
+initialized to 1 to provide an unbiased starting point. Then, the
+process begins with the Decision-Maker, which first undergoes self-
+learning to establish an initial experience memory. Building on this
+foundation, Auditors are assigned profile-specific feature subsets
+and initialize their own experience through Decision-Maker-guided
+retrieval and self-reflection. Finally, relations between agents are es-
+tablished via hierarchical clustering, where each upper-level agent
+selects a subset of lower-level agents to form localized groups,
+defining the multi-layer structure.
+3.2.1
+Decision-Maker Self-Learning. We first initialize the system
+by training the Decision-Maker through a self-learning process.
+Given an input instance 𝑥with ground-truth label 𝑦, the Decision-
+Maker forms a preliminary judgment ( ˆ𝑑𝐷, ˆ𝑟𝐷) based on Equation
+(6) and then performs self-reflection by contrasting it with 𝑦to
+distill new experience:
+Mexp
+𝐷
+←Mexp
+𝐷
+∪SelfRef𝐷
+ 𝑥, ˆ𝑑𝐷, ˆ𝑟𝐷,𝑦,
+(7)
+where SelfRef𝐷(·) summarizes generalized experience from the in-
+put (𝑥, ˆ𝑑𝐷, ˆ𝑟𝐷,𝑦) and appends them to the experience memory. This
+establishes the initial experience memory of the Decision-Maker,
+forming a knowledge base for subsequent training of Auditors.
+3.2.2
+Auditor Assignment. To transfer knowledge effectively while
+avoiding homogeneous behaviors, each input is decomposed into
+multiple feature dimensions, and every Auditor is assigned a dis-
+tinct profile P𝑎that restricts its observation to a subset of these
+dimensions. This ensures that Auditors specialize in complementary
+perspectives rather than sharing identical views.
+However, feature allocation alone is coarse, since all agents
+would otherwise start with identical experience memories, under-
+mining their diversity. To address this, we introduce a Decision-
+Maker-Guided Auditor Training, in which the Decision-Maker pro-
+vides experiential knowledge to each Auditor. Inspired by retrieval-
+augmented generation (RAG) [11], Auditors learn from the Decision-
+Maker’s experience memory by retrieving fragments most relevant
+to their profiles.
+Formally, given Auditor 𝐴’s observable feature subset F (𝑥)𝐴,
+we encode its textual description into an embedding vector z𝐴.
+Each experience fragment e ∈Mexp
+𝐷
+is represented both by its raw
+description and corresponding embedding representation. Auditor
+𝐴then retrieves the top-𝑘relevant fragments:
+𝐸𝐴= TopK𝑘
+
+Sim(z𝐴, e)
+
+,
+(8)
+where Sim(·, ·) denotes cosine similarity.
+The textual content corresponding to retrieved fragments 𝐸𝐴is
+distilled by Auditor 𝐴through a local self-reflection process:
+Mexp
+𝐴
+←SelfRef𝐴(𝐸𝐴),
+(9)
+where SelfRef𝐴(·) summarizes the fragments into generalizable
+heuristics. This completes the initialization of each Auditor’s profile
+and experience memory.
+3.2.3
+Relation Construction. After Auditors are assigned, we estab-
+lish the relations among the three roles of agents, grouping those
+with similar behaviors into organized teams and thereby defining
+the structure. Specifically, Auditors are first clustered [16] based
+on the similarity of their label prediction vectors on the validation
+
+
+
+===== PAGE 5 =====
+PAMAS: Self-Adaptive Multi-Agent System with Perspective Aggregation for Misinformation Detection
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+set. For each cluster G, one Coordinator 𝐶is designated to manage
+it. The Coordinator’s anchor Auditor is selected as the member
+achieving the highest validation F1-score:
+𝐴∗= arg max
+𝐴∈G F1(𝐴).
+(10)
+After the anchor is determined, the corresponding group for this
+Coordinator is expanded by randomly sampling additional Auditors
+from G until the predefined group size is reached. If the number
+of available Auditors in G is insufficient, the nearest neighboring
+cluster is used for supplementary sampling. Each resulting group
+thus defines the subordinates of a Coordinator:
+S(𝐶) = {𝐴∗,𝐴2, . . . ,𝐴𝑘},
+𝑘≤𝑛max,
+(11)
+where 𝑛max is the maximum allowable group size set for each co-
+ordinator. This procedure is recursively applied: newly formed
+Coordinators are clustered in the same manner, anchors are se-
+lected, and higher-level groups are built until the Decision-Maker
+sits at the top.
+As a result, PAMAS forms a hierarchical structure that embeds
+diversity, where each Auditor focuses on a distinct feature-based
+perspective and each Coordinator supervises a unique subset of
+members, jointly ensuring heterogeneous viewpoints across the
+structure.
+3.3
+The Optimization of PAMAS
+Once initialized, PAMAS operates an iterative refinement process,
+which consists of three connected stages. The forward pass first
+generates decisions in a bottom-up manner. Based on these results,
+topology adaptation adjusts the hierarchy by pruning redundant
+agents and expanding new ones when failures occur. Finally, under
+the adapted structure, backward targeted correction updates agent
+memories for misclassified cases.
+3.3.1
+Forward Pass. Given an input instance 𝑥, each Auditor gen-
+erates a decision–reason pair following Eq. (4), leveraging both
+its action and experience memories. Coordinators then aggregate
+the outputs of their subordinates by weighted voting as defined in
+Eq. (5), using trust weights stored in their confidence memories.
+Finally, the Decision-Maker synthesizes the top-level decision and
+explanation according to Eq. (6), integrating both its own profile
+and the aggregated results from top-level leaders. All decisions
+produced at each level are simultaneously logged into the corre-
+sponding agents’ action memories, ensuring accountability and
+enabling subsequent refinement.
+3.3.2
+Topology Adaptation. After each batch of forward pass, the
+topology of PAMAS adapts to balance efficiency and robustness
+through two complementary operations, pruning redundant mem-
+bers and expanding complementary members, both conducted
+within the scope of each Coordinator’s subordinate group.
+In pruning redundant members, each subordinate 𝑖∈S(𝐶) of
+Coordinator 𝐶is evaluated by a score:
+Score𝑖=
+
+Acc(S(𝐶)) −Acc(S(𝐶) \ {𝑖})
+
+|                                     {z                                     }
+marginal accuracy improvement
+−𝜆·
+1
+|S(𝐶)| −1
+∑︁
+𝑗∈S(𝐶)\{𝑖}
+cos(v𝑖, v𝑗)
+|                                     {z                                     }
+average redundancy with peers
+,
+(12)
+where v𝑖denotes the prediction vector of agent 𝑖on the validation
+set. 𝜆controls the balance of accuracy and redundancy. If Score𝑖< 0,
+the agent is considered unhelpful and removed.
+In expanding complementary members, when a group S(𝐶)
+exhibits correlated failures on borderline samples, we evaluate each
+candidate 𝑖drawn from the lower layer but not belonging to S(𝐶):
+Gain𝑖=
+ΔAcc(S(𝐶) ∪{𝑖})
+|                  {z                  }
+expected accuracy improvement
+−𝛾·
+1
+|S(𝐶)|
+∑︁
+𝑗∈S(𝐶)
+cos(v𝑖, v𝑗)
+|                           {z                           }
+similarity penalty
+,
+(13)
+where ΔAcc(S(𝐶) ∪{𝑖}) denotes the improvement after adding
+𝑖, and the second term penalizes overlap with existing members
+based on their prediction vectors. Candidates with the highest gain
+are incorporated as new subordinates under Coordinator 𝐶.
+3.3.3
+Backward Targeted Correction. Following topology adapta-
+tion, agents update their memories under the guidance of ground-
+truth labels, and this update is applied only to those agents that
+made incorrect judgments. This process proceeds in a top-down
+manner, from the Decision-Maker to Coordinators and finally to
+Auditors. The Decision-Maker first performs self-reflection, updat-
+ing both its experience memory and its confidence in subordinates.
+For updating the experience memory:
+Mexp
+𝐷
+←Mexp
+𝐷
+∪SelfRef𝐷(𝑥, ˆ𝑑𝐷, ˆ𝑟𝐷,𝑦).
+(14)
+For confidence updates, Decision-Maker updates its confidence
+memory for each subordinate 𝑗:
+Mconf[𝑗] ←(1 −𝛼) · Mconf[𝑗]
++ 𝛼·
+h
+𝑓ref(𝑦,𝑑𝑗)
+|     {z     }
+self-reflection term
++
+#{𝑑𝑗=𝑦}
+#samples
+|  {z  }
+historical accuracy term
+i
+,
+(15)
+where the first term 𝑓ref(𝑦,𝑑𝑗) captures the outcome of the agent’s
+self-reflection process, i.e., the value extracted from its reasoning
+that reflects how the prediction–ground truth discrepancy influ-
+ences subsequent weight adjustment. The second term represents
+the long-term reliability of agent 𝑗, quantified as its historical ac-
+curacy on validation data. The 𝛼controls the balance between
+short-term reflective adjustment and long-term statistical evidence.
+The same refinement logic is subsequently applied to Coordina-
+tors: each Coordinator updates its confidence memory in its own
+subordinates following the above procedure.
+Auditors, as the most numerous and token-intensive role, do
+not perform costly self-reflection for each error. Instead, at the
+end of each epoch, Auditors update their experience memory by
+retrieving new fragments from the Decision-Maker’s experience
+
+
+
+===== PAGE 6 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Zongwei Wang, Min Gao, Junliang Yu, Tong Chen & Chenghua Lin
+memory, guided by the fragments already stored in their own mem-
+ory. Specifically, Auditor 𝐴uses its existing fragments to query
+Mexp
+𝐷, retrieves the top-𝑘relevant fragments 𝐸𝐴according to co-
+sine similarity, and then applies the same self-reflection process to
+summarize them:
+Mexp
+𝐴
+←Mexp
+𝐴
+∪SelfRef𝐴(𝐸𝐴).
+(16)
+This incremental update enables Auditors to continually enrich
+their experience with Decision-Maker knowledge while avoiding
+costly per-instance reflection.
+3.4
+Routing Inference of PAMAS
+After the optimization of PAMAS, the system can be deployed for
+inference. A straightforward deployment would require every agent
+to evaluate every incoming instance, which introduces substantial
+unnecessary computation: many simple instances can already be
+resolved with high agreement among lower-level agents, making
+further evaluations by higher-level agents redundant. To avoid such
+inefficiency, PAMAS employs a top-down, confidence-guided rout-
+ing strategy, enabling the system to terminate inference early when
+subordinate consensus is sufficiently strong and to escalate only
+those contentious instances that require higher-level judgment.
+Suppose the Decision-Maker 𝐷supervises subordinates S(𝐷)
+with confidences 𝛼𝑗recorded in Mconf
+𝐷
+. Routing begins by activating
+the top-2 subordinates:
+{𝑗1, 𝑗2} = arg max(2)
+𝑗∈S(𝐷) 𝛼𝑗,
+(17)
+where arg max(2) returns the two indices with the highest confi-
+dences.
+If their predictions agree, finalize 𝑑𝐶= 𝑑𝑗1. Otherwise, activate
+more subordinates in descending confidence. At step 𝑡, the active
+set is:
+A𝑡= {𝑗1, 𝑗2, 𝑗3, 𝑗4, . . . , 𝑗2𝑡+1, 𝑗2𝑡+2}.
+(18)
+Define the majority margin over the active set:
+𝑚(A𝑡) =
+∑︁
+𝑗∈A𝑡
+(2𝑑𝑗−1),
+(19)
+where we early stop as soon as a non-tie majority emerges, i.e.,
+𝑚(A𝑡) ≠0. Denote the minimal active set achieving this by A★,
+with majority decision:
+𝑑𝐶= I[𝑚(A★) > 0 ].
+(20)
+The same routing recursively proceeds top-down for all Coordi-
+nators, propagating until the lowest-level Auditors. At this stage,
+the Decision-Maker itself constructs its own minimal majority-
+active set A★. Each Coordinator selected into A★produces a routed
+decision 𝑑𝐶𝑘, which is then weighted by the Decision-Maker’s con-
+fidence 𝛼𝑘∈Mconf
+𝐷
+. Finally, the Decision-Maker integrates these
+routed summaries together with its own experience memory and
+the full feature set F (𝑥) to produce the final decision and explana-
+tion:
+(𝑑𝐷,𝑟𝐷) ∼𝜙𝐷
+
+F (𝑥), {(𝑑𝐶𝑘,𝑟𝐶𝑘, 𝛼𝑘)}𝑘∈A★, Mconf
+𝐷
+, Mexp
+𝐷, Mact
+𝐷
+
+.
+(21)
+A complete view of the algorithmic workflow is provided in the
+Appendix, referred to Algorithm 1, and further analysis of PAMAS
+about interpretability and efficiency can be found in Appendix E.
+4
+Experiments
+This section evaluates the effectiveness of PAMAS. Specifically, we
+aim to answer the following questions: (Q1) How does PAMAS per-
+form compared to existing deep learning methods, as well as MAS
+methods? (Q2) What is the impact of the proposed topology adapta-
+tion, targeted correction, and confidence-guided routing strategies
+on detection performance? (Q3) How efficient is PAMAS in terms of
+token consumption compared to other multi-agent methods? (Q4)
+How does PAMAS behave in case studies involving both correctly
+classified and misclassified instances? Experimental settings can be
+found in Appendix A.
+4.1
+Performance Comparison
+We evaluate the proposed PAMAS against traditional and repre-
+sentative deep learning models, as well as state-of-the-art MAS
+methods. The results are reported in Table 1, where we consider
+multiple evaluation metrics across three benchmark datasets. From
+the experimental results, we derive the following observations:
+• Compared with traditional deep learning methods and existing
+MAS baselines, PAMAS achieves the best performance across
+nearly all metrics and datasets, demonstrating the effectiveness
+of perspective-aware aggregation in misinformation detection.
+• The Vanilla setup achieves performance comparable to or even
+worse than the simple MLP baseline, and falls far behind multi-
+agent systems. This indicates that directly invoking an LLM
+for detection performs even worse. Although equipping it with
+domain-specific knowledge and evolved memory brings slight
+improvement, both LLM-based detection and relying on a single
+agent remain insufficient to handle the deceptive and context-
+dependent nature of misinformation.
+• Existing multi-agent topologies do not always outperform strong
+deep learning models. While simple multi-agent structures such
+as Chain, and Star achieve comparable or slightly better per-
+formance than MLP, they often underperform advanced deep
+learning methods tailored for specific tasks. Nevertheless, more
+sophisticated designs such as Graph, Layer, and DyLAN show
+performance improvements, highlighting that complex structural
+design is important in misinformation detection.
+4.2
+Ablation Study
+We further evaluate the contribution of each proposed efficiency-
+oriented strategy, including topology adaptation, target correction,
+and confidence-guided routing. Specifically, we design five variants:
+PAMAS w/o Enhancements, which disables all three strategies;
+PAMAS w/o Topology Adaptation, which retains target correc-
+tion and routing but removes topology adaptation; PAMAS w/o
+Target Correction, which disables target correction while keeping
+the other two strategies; PAMAS w/o Routing, which removes
+confidence-guided routing but preserves the other strategies; and
+the full PAMAS, which integrates all three strategies. The results
+are summarized in Figure 3, from which the following observations
+can be drawn:
+• Even without any enhancement, PAMAS achieves competitive
+performance while consuming fewer tokens than complex multi-
+agent structures such as Fully Graph, Fully Layer, and DyLAN.
+
+
+
+===== PAGE 7 =====
+PAMAS: Self-Adaptive Multi-Agent System with Perspective Aggregation for Misinformation Detection
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Table 1: Performance comparison of PAMAS against deep learning and multi-agent baselines on three misinformation detection
+datasets. The best results are in bold, and the runners-up are underlined.
+Method
+Amazon
+DeRev2018
+PolitiFact
+Accuracy
+Precision
+Recall
+F1
+AUC
+Accuracy
+Precision
+Recall
+F1
+AUC
+Accuracy
+Precision
+Recall
+F1
+AUC
+Deep Learning
+Method
+MLP
+0.9235
+0.9023
+0.8823
+0.8913
+0.9224
+0.7947
+0.7825
+0.8135
+0.7945
+0.8524
+0.9148
+0.8900
+0.9106
+0.8994
+0.9136
+NFGCN-TIA
+0.9412
+0.9324
+0.9543
+0.9445
+0.9464
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+SIPUL
+-
+-
+-
+-
+-
+0.9074
+0.8884
+0.9130
+0.8995
+0.9285
+-
+-
+-
+-
+-
+BREAK
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+0.9465
+0.9478
+0.9493
+0.9502
+0.9425
+Multi-Agent
+Method
+Vanilla-LLM
+0.8956
+0.8765
+0.8856
+0.8788
+0.8832
+0.8157
+0.8066
+0.8226
+0.8182
+0.8281
+0.8723
+0.8529
+0.8751
+0.8637
+0.8765
+Vanilla-Agent
+0.9123
+0.9047
+0.8976
+0.8987
+0.9135
+0.8376
+0.8223
+0.8453
+0.8303
+0.8684
+0.9265
+0.8834
+0.9026
+0.8985
+0.9084
+Chain
+0.9151
+0.9234
+0.9025
+0.9124
+0.9584
+0.8463
+0.8535
+0.8849
+0.8685
+0.8735
+0.9343
+0.9238
+0.9478
+0.9383
+0.9305
+Star
+0.9135
+0.9337
+0.9186
+0.9234
+0.9653
+0.8764
+0.8834
+0.8949
+0.8839
+0.9036
+0.9378
+0.9432
+0.9385
+0.9436
+0.9427
+Tree
+0.9375
+0.9484
+0.9274
+0.9355
+0.9535
+0.8925
+0.8885
+0.9054
+0.9025
+0.9134
+0.9314
+0.9282
+0.9402
+0.9393
+0.9332
+Graph
+0.9325
+0.9473
+0.9599
+0.9527
+0.9696
+0.8885
+0.8985
+0.9085
+0.9043
+0.9112
+0.9332
+0.9456
+0.9325
+0.9374
+0.9686
+Layer
+0.9347
+0.9385
+0.9464
+0.9389
+0.9683
+0.9255
+0.9082
+0.9174
+0.9112
+0.9331
+0.9404
+0.9285
+0.9496
+0.9353
+0.9625
+DyLAN
+0.9454
+0.9456
+0.9696
+0.9535
+0.9635
+0.9314
+0.9135
+0.9328
+0.9242
+0.9425
+0.9424
+0.9329
+0.9523
+0.9475
+0.9604
+PAMAS
+0.9715
+0.9477
+0.9852
+0.9661
+0.9735
+0.9628
+0.9427
+0.9739
+0.9621
+0.9648
+0.9643
+0.9553
+0.9706
+0.9594
+0.9733
+• Each of the three strategies provides measurable improvements,
+both in terms of accuracy and token efficiency. Topology adapta-
+tion enhances robustness and accuracy by dynamically adjusting
+the number of active agents; target correction further strengthens
+detection by selectively retraining agents with a history of mis-
+judgments, enabling precise correction of systematic weaknesses;
+and confidence-guided routing improves inference efficiency by
+focusing communication on the most reliable signals.
+• Among the three, topology adaptation delivers the largest accu-
+racy gains across datasets, whereas target correction achieves
+the greatest reduction in token consumption. Confidence-guided
+routing adds a further efficiency boost with a modest but con-
+sistent accuracy lift, placing the full PAMAS on the best accu-
+racy–efficiency frontier.
+Amazon
+DeRev2018
+PolitiFact
+0.950
+0.960
+0.970
+0.980
+Accuracy
+Amazon
+DeRev2018
+PolitiFact
+0.0
+5.0
+10.0
+15.0
+20.0
+25.0
+Tokens
+PAMAS w/o Enhancements
+PAMAS w/o Topology Adaptation
+PAMAS w/o Target Correction
+PAMAS w/o Routing
+PAMAS
+Figure 3: Impact of topology adaptation, target correction,
+and confidence-guided routing on accuracy–efficiency trade-
+offs across three datasets.
+4.3
+Token Efficiency Comparison
+We further compare PAMAS with existing multi-agent collaboration
+topologies in terms of token consumption, as shown in Figure 4.
+From the results, two main findings emerge:
+• PAMAS achieves the lowest token consumption while maintain-
+ing the best performance. Due to its topology adaptation, target
+correction, and confidence-guided routing mechanisms, PAMAS
+avoids unnecessary updates and redundant activations, leading
+to a substantial reduction in tokens without sacrificing accuracy.
+This demonstrates its suitability for large-scale misinformation
+detection tasks where efficiency is critical.
+• Complex MAS generally incur higher token costs but yield better
+performance than simpler ones. Topologies such as fully con-
+nected graphs, layered organizations, or DyLAN exhibit stronger
+detection performance compared to basic chain or star structures,
+but at the expense of significantly higher token usage. While such
+designs may be reasonable for general-purpose reasoning tasks,
+they are inefficient for misinformation detection, where the com-
+bination of robustness and scalability is essential. PAMAS strikes
+a better balance by introducing structural hierarchy and adaptive
+mechanisms tailored to this domain.
+4.4
+Case Studies
+We present three representative cases to demonstrate how PAMAS
+performs: one successful case and two unsuccessful ones.
+Successful Case (Ground-truth: 1, Prediction: 1)
+User23898, Decision: 1 Reason: All coordinators unan-
+imously predict malicious (1) with high confidence. The
+user’s metrics, including abnormally high posting frequency,
+overly extreme sentiment, and repetitive suspicious content,
+strongly support a malicious classification. There is no con-
+flicting evidence to suggest benign activity.
+Analysis: This case succeeds because both the coordinators and
+the decision-maker are fully aligned. The user’s features strongly in-
+dicate malicious behavior, and the absence of contradictory signals
+ensures a reliable prediction.
+Unsuccessful Case 1: Coordinator Disagreement (Ground-
+truth: 0, Prediction: 1)
+User18284, Decision: 1 Reason: Votes are split: 5 out of
+8 coordinators predict malicious (1), while the rest predict
+benign (0). Malicious votes are driven by inconsistent rating
+patterns and sentiment fluctuations, whereas benign votes
+emphasize overall positive sentiment and stable review fre-
+quency. Conflicting evidence prevents a clear consensus,
+leading the decision-maker to side with the majority mali-
+cious vote.
+Analysis: This case fails because the coordinators produced
+conflicting judgments. The decision-maker was forced to arbitrate
+between divided evidence, which reduced confidence and resulted
+in a misclassification.
+
+
+
+===== PAGE 8 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Zongwei Wang, Min Gao, Junliang Yu, Tong Chen & Chenghua Lin
+Unsuccessful Case 2: Coordinator–Decision Mismatch
+(Ground-truth: 0, Prediction: 1)
+User7430, Decision: 1 Reason: Most coordinators unani-
+mously predict benign (0), citing high avg_rating, positive
+sentiment, and consistent review length. However, I override,
+highlighting abnormal interaction frequency, and suspicious
+review, which together suggest malicious behavior.
+Analysis: This case fails because the decision-maker’s inde-
+pendent assessment contradicted the unanimous coordinator con-
+sensus. Although surface-level metrics suggested benign behavior,
+deeper anomaly signals led the decision-maker to predict malicious,
+creating a misalignment between consensus and final decision.
+0.92
+0.93
+0.94
+0.95
+0.96
+0.97
+Accuracy
+15
+20
+25
+30
+35
+40
+Token consumption (10^6)
+Amazon
+0.86
+0.88
+0.90
+0.92
+0.94
+0.96
+Accuracy
+4
+6
+8
+10
+12
+14
+16
+Token consumption (10^6)
+DeRev2018
+0.93
+0.94
+0.95
+0.96
+Accuracy
+2
+3
+4
+5
+6
+7
+Token consumption (10^6)
+PolitiFact
+Chain
+Star
+Tree
+Fully Graph
+Fully Layer
+DyLAN
+PAMAS
+Figure 4: Comparative results of various MAS in terms of
+accuracy and token consumption across three datasets.
+5
+Related Work
+Misinformation Detection. Misinformation manifests in multiple
+forms, including abnormal user behaviors [31, 34, 35], deceptive
+online reviews [7, 10, 24], and fabricated news content [9, 42, 44].
+Early research relied heavily on feature engineering and manual
+rule construction, focusing on linguistic cues, sentiment markers,
+or propagation patterns to distinguish truthful from deceptive con-
+tent [17]. With the rise of deep learning, neural architectures such
+as CNNs, RNNs, and GCNs [5, 40] became dominant, learning high-
+dimensional semantic and structural representations directly from
+text or graph-structured data [4, 21, 36]. Recent advances further
+explore hybrid methods, such as PU learning for streaming re-
+views [38] or graph-based denoising frameworks for fake news [41].
+Despite these progressions, misinformation detection has largely
+been studied through single-model or monolithic paradigms, and to
+date no work has systematically investigated the use of multi-agent
+collaboration for this domain. This leaves open the question of
+whether multiple agents, each specialized in different perspectives,
+can more effectively capture the multifaceted nature of deception.
+Multi-Agent Collaboration with LLMs. Recent research has
+highlighted the promise of multi-agent collaboration, showing that
+a team of LLM-based agents can outperform individual ones in rea-
+soning, planning, and decision-making tasks [18]. Various topolo-
+gies have been explored to structure inter-agent communication.
+Sequential chain-based pipelines allow information to be passed
+step by step (e.g., ChatDev [19], MetaGPT [6]). Centralized star
+structures rely on a hub agent to coordinate subordinates (e.g.,
+AutoGen [37]). Hierarchical tree organizations introduce multiple
+layers of coordination (e.g., SoA [8]). Graph-based structures em-
+ploy fully connected or random edges to maximize information
+sharing, while more recent frameworks such as GPTSwarm [45]
+and DyLAN [14] explicitly encode agent interactions in layered
+organizations where different levels play specialized roles.
+These designs demonstrate the potential of collective intelligence
+but remain limited when applied to misinformation detection. The
+key challenge is that misinformation is deliberately deceptive: no
+single perspective can reliably capture all its forms. Effective detec-
+tion thus requires diverse perspectives and systematic aggregation
+mechanisms. Existing topologies rarely enforce perspective diver-
+sity at the agent level or provide structured aggregation across
+agents. Moreover, they lack adaptive structural mechanisms to
+balance robustness with efficiency, a critical requirement when au-
+diting massive streams of content. These gaps motivate the need for
+a new framework that enforces role differentiation, adapts its struc-
+ture dynamically, and consolidates heterogeneous perspectives into
+reliable judgments.
+6
+Conclusion
+In this paper, we presented PAMAS, a hierarchical self-adaptive
+perspective aggregation system that brings LLM-based multi-agent
+collaboration into misinformation detection. By explicitly differen-
+tiating the roles of Auditors, Coordinators, and a Decision-Maker,
+PAMAS addresses the dual challenge of input-level and structural
+information drowning, ensuring that weak anomalies are amplified
+and preserved through progressive judgment aggregation. Beyond
+robustness, the framework enhances efficiency through adaptive
+mechanisms that simplify the structure and strengthen agent ca-
+pabilities during both optimization and inference. Our extensive
+experiments confirm that PAMAS delivers consistent improvements
+over strong baselines, advancing not only accuracy but also effi-
+ciency and interpretability.
+Looking forward, several directions remain open. First, extending
+PAMAS to handle multimodal misinformation would broaden its
+applicability to real-world platforms. Second, integrating adaptive
+human-in-the-loop strategies could further enhance accountability
+and trust in high-stakes auditing scenarios.
+Acknowledgments
+This work is supported by the National Natural Science Foundation
+of China (Grant No. 62176028), the Natural Science Foundation of
+Chongqing, China (Grant No.CSTB2024NSCQ-MSX0617), the Pro-
+gram of China Scholarship Council (Grant No. 202406050164), the
+Australian Research Council (Grant No. DE230101033, DE250100613,
+LP230200892, and DP240101814), Project to Attract Foreign Experts
+(Grant No. H20251055), and the Royal Society International Ex-
+change Grant (IEC\NSFC\242347) through Royal Society and NSFC.
+Coauthor Kai Shu consulted on this paper on unpaid weekends for
+personal interest.
+References
+[1] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde
+De Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas Joseph,
+Greg Brockman, et al. 2021. Evaluating large language models trained on code.
+arXiv preprint arXiv:2107.03374 (2021).
+[2] Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun,
+Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano,
+
+
+
+===== PAGE 9 =====
+PAMAS: Self-Adaptive Multi-Agent System with Perspective Aggregation for Misinformation Detection
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+et al. 2021. Training verifiers to solve math word problems. arXiv preprint
+arXiv:2110.14168 (2021).
+[3] Anass Fahfouh, Jamal Riffi, Mohamed Adnane Mahraz, Ali Yahyaouy, and Hamid
+Tairi. 2022. A contextual relationship model for deceptive opinion spam detection.
+IEEE Transactions on Neural Networks and Learning Systems 35, 1 (2022), 1228–
+1239.
+[4] Xinyi Gao, Guanhua Ye, Tong Chen, Wentao Zhang, Junliang Yu, and Hongzhi
+Yin. 2025. Rethinking and accelerating graph condensation: A training-free
+approach with class partition. In Proceedings of the ACM on Web Conference 2025.
+4359–4373.
+[5] Xinyi Gao, Junliang Yu, Tong Chen, Guanhua Ye, Wentao Zhang, and Hongzhi
+Yin. 2025. Graph condensation: A survey. IEEE Transactions on Knowledge and
+Data Engineering (2025).
+[6] Sirui Hong, Mingchen Zhuge, Jonathan Chen, Xiawu Zheng, Yuheng Cheng,
+Ceyao Zhang, Jinlin Wang, Zili Wang, Steven Ka Shing Yau, Zijuan Lin, et al.
+2024. MetaGPT: Meta programming for a multi-agent collaborative framework.
+International Conference on Learning Representations, ICLR.
+[7] Yinqiu Huang, Min Gao, Kai Shu, Chenghua Lin, Jia Wang, and Wei Zhou. 2024.
+EML: Emotion-Aware Meta Learning for Cross-Event False Information Detection.
+ACM Transactions on Knowledge Discovery from Data 18, 8 (2024), 1–25.
+[8] Yoichi Ishibashi and Yoshimasa Nishimura. 2024. Self-organized agents: A llm
+multi-agent framework toward ultra large-scale code generation and optimization.
+arXiv preprint arXiv:2404.02183 (2024).
+[9] Wei Jiang, Tong Chen, Xinyi Gao, Wentao Zhang, Lizhen Cui, and Hongzhi Yin.
+2025. Epidemiology-informed network for robust rumor detection. In Proceedings
+of the ACM on Web Conference 2025. 3618–3627.
+[10] Wei Jiang, Tong Chen, Wei Yuan, Xiangyu Zhao, Quoc Viet Hung Nguyen, and
+Hongzhi Yin. 2025. Towards Propagation-aware Representation Learning for
+Supervised Social Media Graph Analytics. arXiv preprint arXiv:2509.01124 (2025).
+[11] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin,
+Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel,
+et al. 2020. Retrieval-augmented generation for knowledge-intensive nlp tasks.
+Advances in neural information processing systems 33 (2020), 9459–9474.
+[12] Tian Liang, Zhiwei He, Wenxiang Jiao, Xing Wang, Yan Wang, Rui Wang,
+Yujiu Yang, Shuming Shi, and Zhaopeng Tu. 2023.
+Encouraging divergent
+thinking in large language models through multi-agent debate. arXiv preprint
+arXiv:2305.19118 (2023).
+[13] Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao Wu, Chengda Lu, Cheng-
+gang Zhao, Chengqi Deng, Chenyu Zhang, Chong Ruan, et al. 2024. Deepseek-v3
+technical report. arXiv preprint arXiv:2412.19437 (2024).
+[14] Zijun Liu, Yanzhe Zhang, Peng Li, Yang Liu, and Diyi Yang. 2024. A dynamic llm-
+powered agent network for task-oriented agent collaboration. In First Conference
+on Language Modeling.
+[15] Mahmoud Mohammadi, Yipeng Li, Jane Lo, and Wendy Yip. 2025. Evaluation and
+benchmarking of llm agents: A survey. In Proceedings of the 31st ACM SIGKDD
+Conference on Knowledge Discovery and Data Mining V. 2. 6129–6139.
+[16] Fionn Murtagh and Pedro Contreras. 2012. Algorithms for hierarchical clustering:
+an overview. Wiley interdisciplinary reviews: data mining and knowledge discovery
+2, 1 (2012), 86–97.
+[17] Myle Ott, Yejin Choi, Claire Cardie, and Jeffrey T Hancock. 2011. Finding de-
+ceptive opinion spam by any stretch of the imagination. In Proceedings of the
+49th Annual Meeting of the Association for Computational Linguistics: Human
+Language Technologies-Volume 1.
+[18] Joon Sung Park, Joseph O’Brien, Carrie Jun Cai, Meredith Ringel Morris, Percy
+Liang, and Michael S Bernstein. 2023. Generative agents: Interactive simulacra
+of human behavior. In Proceedings of the 36th annual acm symposium on user
+interface software and technology.
+[19] Chen Qian, Wei Liu, Hongzhang Liu, Nuo Chen, Yufan Dang, Jiahao Li, Cheng
+Yang, Weize Chen, Yusheng Su, Xin Cong, et al. 2024. ChatDev: Communicative
+Agents for Software Development. In Proceedings of the 62nd Annual Meeting
+of the Association for Computational Linguistics (Volume 1: Long Papers). 15174–
+15186.
+[20] Chen Qian, Zihao Xie, Yifei Wang, Wei Liu, Kunlun Zhu, Hanchen Xia, Yufan
+Dang, Zhuoyun Du, Weize Chen, Cheng Yang, et al. 2024. Scaling large language
+model-based multi-agent collaboration. arXiv preprint arXiv:2406.07155 (2024).
+[21] Natali Ruchansky, Sungyong Seo, and Yan Liu. 2017. Csi: A hybrid deep model for
+fake news detection. In Proceedings of the 2017 ACM on Conference on Information
+and Knowledge Management. 797–806.
+[22] Shivam Sharma, Firoj Alam, Md Shad Akhtar, Dimitar Dimitrov, Giovanni
+Da San Martino, Hamed Firooz, Alon Halevy, Fabrizio Silvestri, Preslav Nakov,
+and Tanmoy Chakraborty. 2022. Detecting and Understanding Harmful Memes:
+A Survey. In 31st International Joint Conference on Artificial Intelligence, IJCAI
+2022. International Joint Conferences on Artificial Intelligence, 5597–5606.
+[23] Kai Shu, Limeng Cui, Suhang Wang, Dongwon Lee, and Huan Liu. 2019. de-
+fend: Explainable fake news detection. In Proceedings of the 25th ACM SIGKDD
+international conference on knowledge discovery & data mining. 395–405.
+[24] Kai Shu, Amy Sliva, Suhang Wang, Jiliang Tang, and Huan Liu. 2017. Fake news
+detection on social media: A data mining perspective. ACM SIGKDD explorations
+newsletter (2017).
+[25] Zhang Shunxiang, Zhu Aoqiang, Zhu Guangli, Wei Zhongliang, and Li KuanCh-
+ing. 2023. Building fake review detection model based on sentiment intensity
+and PU learning. IEEE Transactions on Neural Networks and Learning Systems
+(2023).
+[26] Hind Taud and Jean-Franccois Mas. 2017. Multilayer perceptron (MLP). In
+Geomatic approaches for modeling land change scenarios. Springer, 451–455.
+[27] Khanh-Tung Tran, Dung Dao, Minh-Duong Nguyen, Quoc-Viet Pham, Barry
+O’Sullivan, and Hoang D Nguyen. 2025. Multi-agent collaboration mechanisms:
+A survey of llms. arXiv preprint arXiv:2501.06322 (2025).
+[28] Jia Wang, Min Gao, Zongwei Wang, Chenghua Lin, Wei Zhou, and Junhao Wen.
+2022. Ada: Adversarial learning based data augmentation for malicious users
+detection. Applied Soft Computing (2022).
+[29] Junlin Wang, Jue Wang, Ben Athiwaratkun, Ce Zhang, and James Zou. 2024.
+Mixture-of-agents enhances large language model capabilities. arXiv preprint
+arXiv:2406.04692 (2024).
+[30] Shilei Wang, Peng Zhang, Hui Wang, Hongtao Yu, and Fuzhi Zhang. 2022. Detect-
+ing shilling groups in online recommender systems based on graph convolutional
+network. Information Processing & Management (2022).
+[31] Zongwei Wang, Min Gao, Jundong Li, Junwei Zhang, and Jiang Zhong. 2022.
+Gray-box shilling attack: An adversarial learning approach. ACM Transactions
+on Intelligent Systems and Technology (TIST) 13, 5 (2022), 1–21.
+[32] Zongwei Wang, Min Gao, Wentao Li, Junliang Yu, Linxin Guo, and Hongzhi Yin.
+2023. Efficient bi-level optimization for recommendation denoising. In Proceedings
+of the 29th ACM SIGKDD conference on knowledge discovery and data mining.
+2502–2511.
+[33] Zongwei Wang, Min Gao, Junliang Yu, Xinyi Gao, Quoc Viet Hung Nguyen, Shazia
+Sadiq, and Hongzhi Yin. 2025. Id-free not risk-free: Llm-powered agents unveil
+risks in id-free recommender systems. In Proceedings of the 48th International
+ACM SIGIR Conference on Research and Development in Information Retrieval.
+1902–1911.
+[34] Zongwei Wang, Min Gao, Junliang Yu, Shazia Sadiq, Hongzhi Yin, and Ling Liu.
+2026. When Graph Contrastive Learning Backfires: Spectral Vulnerability and
+Defense in Recommendation. ACM Transactions on Information Systems 44, 2
+(2026), 1–30.
+[35] Zongwei Wang, Junliang Yu, Min Gao, Hongzhi Yin, Bin Cui, and Shazia Sadiq.
+2024. Unveiling vulnerabilities of contrastive recommender systems to poisoning
+attacks. In Proceedings of the 30th ACM SIGKDD conference on knowledge discovery
+and data mining. 3311–3322.
+[36] Junfei Wu, Weizhi Xu, Qiang Liu, Shu Wu, and Liang Wang. 2023. Adversarial
+contrastive learning for evidence-aware fake news detection with graph neural
+networks. IEEE Transactions on Knowledge and Data Engineering 36, 11 (2023),
+5591–5604.
+[37] Qingyun Wu, Gagan Bansal, Jieyu Zhang, Yiran Wu, Beibin Li, Erkang Zhu, Li
+Jiang, Xiaoyun Zhang, Shaokun Zhang, Jiale Liu, et al. 2024. Autogen: Enabling
+next-gen LLM applications via multi-agent conversations. In First Conference on
+Language Modeling.
+[38] Zhiang Wu, Jie Cao, Yaqiong Wang, Youquan Wang, Lu Zhang, and Junjie Wu.
+2018. hPSD: a hybrid PU-learning-based spammer detection model for product
+reviews. IEEE transactions on cybernetics (2018).
+[39] Xiaoyu Yang, Yuefei Lyu, Tian Tian, Yifei Liu, Yudong Liu, and Xi Zhang. 2021.
+Rumor detection on social media with graph structured adversarial learning.
+In Proceedings of the twenty-ninth international conference on international joint
+conferences on artificial intelligence. 1417–1423.
+[40] Yonghui Yang, Le Wu, Zihan Wang, Zhuangzhuang He, Richang Hong, and
+Meng Wang. 2024. Graph bottlenecked social recommendation. In Proceedings
+of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data Mining.
+3853–3862.
+[41] Junwei Yin, Min Gao, Kai Shu, Wentao Li, Yinqiu Huang, and Zongwei Wang.
+2025. Graph with Sequence: Broad-Range Semantic Modeling for Fake News
+Detection. In Proceedings of the ACM on Web Conference 2025.
+[42] Junwei Yin, Min Gao, Kai Shu, Zehua Zhao, Yinqiu Huang, and Jia Wang. 2025.
+Emulating reader behaviors for fake news detection. IEEE Transactions on Big
+Data (2025).
+[43] Guibin Zhang, Yanwei Yue, Xiangguo Sun, Guancheng Wan, Miao Yu, Junfeng
+Fang, Kun Wang, Tianlong Chen, and Dawei Cheng. [n. d.]. G-Designer: Archi-
+tecting Multi-agent Communication Topologies via Graph Neural Networks. In
+ICLR 2025 Workshop on Foundation Models in the Wild.
+[44] Xinyi Zhou and Reza Zafarani. 2020. A survey of fake news: Fundamental
+theories, detection methods, and opportunities. ACM Computing Surveys (CSUR)
+(2020).
+[45] Mingchen Zhuge, Wenyi Wang, Louis Kirsch, Francesco Faccio, Dmitrii
+Khizbullin, and Jürgen Schmidhuber. 2024. Gptswarm: Language agents as
+optimizable graphs. In Forty-first International Conference on Machine Learning.
+
+
+
+===== PAGE 10 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Zongwei Wang, Min Gao, Junliang Yu, Tong Chen & Chenghua Lin
+A
+Experimental Setting
+Datasets. We use three commonly used public benchmark datasets
+in our experiments: Amazon [28], DeRev20181, and PolitiFact [41].
+The Amazon dataset represents the e-commerce scenario, where
+the task is to detect fake or abnormal user accounts that engage in
+manipulative behaviors such as spam posting or coordinated review
+injection. DeRev2018 is a product reviews dataset with ground-truth
+veracity labels, specifically designed for deceptive review detection.
+PolitiFact is a widely used fact-checking dataset that focuses on
+fake news and political misinformation labeled by professional
+journalists. The dataset statistics are presented in Table 2.
+Table 2: Statistics of datasets.
+Datasets
+#All
+#True
+#False
+Domain
+Amazon
+4,904
+2,989
+1,915
+Abnormal User
+DeRev2018
+1,552
+776
+776
+Misleading Review
+PolitiFact
+670
+348
+322
+Fake News
+Baselines. We compare PAMAS against two categories of base-
+lines: multi-agent collaboration topologies, and representative deep
+learning and rule-based methods. For Multi-agent baselines:
+• Vanilla-LLM [13]: A direct LLM API invocation to detect misin-
+formation without any agent structure.
+• Vanilla-Agent [15]: A single agent with the simplest profile and
+action memory, serving as the minimal baseline.
+• Chain, Star, Tree [20]: Classical collaboration structures where
+agents are connected sequentially (chain), through a central hub
+(star), or hierarchically (tree).
+• Graph [43]: A fully connected graph where each node is an
+agent and all pairs exchange information.
+• Layer [45]: A fully connected layered structure, where each
+layer contains agents with different roles.
+• DyLAN [14]: A temporal layered design where agents evaluate
+each other and iteratively update mutual trust weights.
+We also compare with representative neural baselines:
+• MLP [26]: A standard multilayer perceptron model for detection.
+• NFGCN-TIA (For Abnormal User) [30]: A graph convolutional
+model that highlights suspicious user interactions through co-
+rating relations.
+• SIPUL (Misleading Review) [25]: A sentiment-intensity-guided
+positive–unlabeled learning framework for review detection.
+• BREAK (Fake News) [41]: A bi-level semantic modeling frame-
+work that denoises and integrates structural and feature seman-
+tics for fake news detection.
+Basic Settings. We divide the datasets into three parts: training
+set, validation set, and test set, following a 7:1:2 ratio. For com-
+monly used evaluation metrics, Accuracy, Precision, Recall, F1, and
+AUC, are employed. Each metric is calculated 5 times, and the av-
+erage results are reported. Besides, we implement PAMAS using
+PyTorch. The backbone LLMs are drawn from three representative
+models: DeepseekV3.1-Chat2, GPT-5 mini3, and Qwen3-8B4. For
+1https://fornaciari.netlify.app/dataset/derev18/
+2https://platform.deepseek.com/
+3https://platform.openai.com/docs/models/gpt-5-mini
+4https://huggingface.co/Qwen/Qwen3-8B
+all baseline multi-agent methods, unless otherwise specified, we
+use DeepseekV3.1-Chat as the default backbone with 32 agents. For
+PAMAS, we construct a hierarchy of 32 agents, consisting of 16
+Auditors, 6 first-level, 5 second-level, 4 third-level Coordinators,
+and 1 Decision-Maker. For Auditors and Coordinators, each agent
+randomly selects one model from the three backbone options, intro-
+ducing diversity at the foundation level. This design aligns with our
+core objective of enhancing perspective diversity for reliable misin-
+formation detection. Unless otherwise stated, the Decision-Maker
+defaults to DeepseekV3.1-Chat.
+B
+Detailed Prompts of Three Agents
+Auditor Prompts
+Reasoning Prompt (𝜙𝐴): You are a detection expert. Given
+user’s <Sub-Features> and your own <Experience>, decide
+if the user is malicious (1) or normal (0). Output is <User,
+Decision, Reason>.
+Refine Prompt (SelfRef𝐴): You are a detection expert.
+Based on your <Current Experience>. You have now studied
+<Other Agent’s Experience>. Please integrate both by sum-
+marizing them into one concise sentence as your updated
+experience. Output is <New Experience>.
+Coordinator Prompts
+Refine Prompt (SelfRef𝐶): You are a team coordinator.
+Your current weight assignments for the members are <Cur-
+rent Weights>. Based on their historical <Decisions> and
+<Reasons>, slightly adjust each subordinate’s weight. Output
+is <New Weights>.
+Decision-Maker Prompts
+Reasoning Prompt (𝜙𝐷): You are the final decision ex-
+pert. Given the user’s <Full Features> and all <Coordinators’
+Judgments> together with your own <Experience>, decide
+if the user is malicious (1) or normal (0). Output is <User,
+Decision, Reason>.
+Refine Prompt (SelfRef𝐷): You are the final decision ex-
+pert. Your current experience is <Current Experience>. You
+have now received <Coordinators’ Judgments and Reasons>.
+Please integrate both, adjust each coordinator’s weight
+slightly, and summarize your updated experience in one
+concise sentence. Output is <New Weights, New Experi-
+ence>.
+C
+Algorithm
+The algorithm of PAMAS is referred to as Algorithm 1.
+D
+Dimensions of Characteristics
+To enable perspective diversity in PAMAS, we design 20 character-
+istic dimensions for each dataset. These dimensions cover two main
+categories: (1) statistical features, which capture distributional or
+behavioral patterns such as ratings and activity frequencies, and
+(2) textual semantics, which capture linguistic properties such as
+sentiment, style, and consistency. Each Auditor’s profile P𝐴spec-
+ifies only a subset of these dimensions, ensuring complementary
+perspectives.
+For abnormal user detection:
+
+
+
+===== PAGE 11 =====
+PAMAS: Self-Adaptive Multi-Agent System with Perspective Aggregation for Misinformation Detection
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Algorithm 1: Optimization and Inference of PAMAS
+Input
+:Training data {(𝑥,𝑦)}, epochs 𝐸𝑝𝑜𝑐ℎ𝑠, maximum
+group size 𝑛max
+Output:Optimized MAS structure (agent hierarchy), agent
+memories, confidence weights, and detection
+outputs (predicted labels)
+1 Initialization:
+2 Initialize memories as empty and confidence weights to 1
+3 Decision-Maker builds initial Mexp
+𝐷
+via self-learning
+4 Assign Auditors with profile-specific subsets
+5 init Mexp
+𝐴
+via RAS
+6 Build hierarchy via clustering with anchor selection and
+group expansion (limited by 𝑛max)
+7 for epoch = 1 to 𝐸𝑝𝑜𝑐ℎ𝑠do
+8
+Forward pass:
+9
+Auditors produce (𝑑𝐴,𝑟𝐴)
+10
+Coordinators aggregate
+11
+Decision-Maker returns (𝑑𝐷,𝑟𝐷)
+12
+Topology adaptation:
+13
+Prune redundant subordinates
+14
+Expand complementary subordinates
+15
+Backward targeted correction (errors only):
+16
+Decision-Maker: Mexp
+𝐷
+←Mexp
+𝐷
+∪SelfRef𝐷(·); update
+Mconf
+𝐷
+17
+Coordinators: update Mconf for their subordinates
+18
+Auditors: retrieve from Mexp
+𝐷
+using existing fragments
+and update Mexp
+𝐴
+19 Inference (confidence-guided routing):
+20 Each Coordinator activates subordinates by descending
+confidence until a majority emerges, yielding 𝑑𝐶
+21 Decision-Maker routes over top-level Coordinators, forms
+A★, and integrates {(𝑑𝐶𝑘, 𝛼𝑘)}𝑘∈A★
+𝐷with Mexp
+𝐷
+and F (𝑥)
+to obtain (𝑑𝐷,𝑟𝐷)
+• Statistical features: average rating, standard deviation of rat-
+ings, rating variance, number of interactions/reviews, model pre-
+diction score, maximum rating, minimum rating, median rating,
+rating range, ratio of positive ratings, ratio of negative ratings,
+most common rating, average review length, standard deviation
+of review lengths, maximum review length, minimum review
+length, median review length, review-length range.
+• Textual semantics: semantic consistency, sentiment summary,
+opinion diversity, informativeness, detail level, persuasive strength,
+emotional intensity, subjectivity, bias, readability.
+For misleading review detection:
+• Statistical features: deviation from product average rating, ratio
+of positive to negative helpful votes, model prediction score, mean
+helpfulness per review, variance of review helpfulness across
+a product, long-tail review frequency, duplicate headline ratio,
+review length variance, median helpfulness per user, outlier score
+in rating distribution, helpfulness-adjusted rating deviation.
+• Textual semantics: sentiment polarity, exaggerated phrase fre-
+quency, promotional keyword ratio, contradiction between head-
+line and body, stance divergence from majority reviews, read-
+ability index, review coherence score, ratio of vague adjectives
+(“good”, “nice”), overuse of comparative/superlative forms.
+For fake news detection:
+• Statistical features: article and headline length, model predic-
+tion score, headline-to-body length ratio, ratio of unique entities,
+entity repetition count, external link count, average sentence
+length, variance of paragraph lengths, ratio of quotations, abnor-
+mal frequency of sensational words, cross-source redundancy
+indicator.
+• Textual semantics: sentiment polarity, sentiment intensity, sub-
+jectivity score, stance inconsistency between headline and body,
+argument coherence score, lexical diversity, frequency of hedging
+terms (“may”, “might”), frequency of extreme terms (“always”,
+“never”), use of clickbait patterns, readability score, claim verifia-
+bility score.
+E
+Analysis of PAMAS
+This section analyzes the advantages of PAMAS over existing ap-
+proaches from two perspectives: interpretability and efficiency.
+Table 3: Comparison of token efficiency across different
+multi-agent topologies. 𝑇= token cost per agent call, 𝑁=
+batch size, 𝑝err = error rate, 𝑘= number of activated agents
+with routing. 𝑛𝐴and 𝑛𝐶denote the number of Auditors and
+Coordinators in PAMAS. 𝑛denotes the number of agents in
+the general topologies. For layered structures, 𝑛ℓdenotes the
+number of agents in layer ℓ. TA, TC, and CR stand for topol-
+ogy adaptation, targeted correction, and confidence-guided
+routing.
+Topology
+Training Cost
+Inference Cost
+Chain
+2𝑁· 𝑛· 𝑇
+𝑛· 𝑇
+Star
+2𝑁· 𝑛· 𝑇
+𝑛· 𝑇
+Fully connected
+2𝑁· 𝑛2 · 𝑇
+𝑛2 · 𝑇
+Layered
+2𝑁· (Í
+ℓ𝑛ℓ) · 𝑇
+(Í
+ℓ𝑛ℓ) · 𝑇
+Tree
+2𝑁· 𝑛· 𝑇
+𝑛· 𝑇
+PAMAS with
+TA
+𝑁·
+
+( ˜𝑛𝐴+ 1)
++( ˜𝑛𝐴+ ˜𝑛𝐶)
+
+· 𝑇
+( ˜𝑛𝐴+ 1) · 𝑇
+PAMAS with
+TA+TC
+𝑁·
+
+( ˜𝑛𝐴+ 1)
++𝑝err( ˜𝑛𝐴+ ˜𝑛𝐶)
+
+· 𝑇
+( ˜𝑛𝐴+ 1) · 𝑇
+PAMAS with
+TA+TC+CR
+𝑁·
+
+( ˜𝑛𝐴+ 1)
++𝑝err( ˜𝑛𝐴+ ˜𝑛𝐶)
+
+· 𝑇
+𝑚·𝑇, 𝑚≪( ˜𝑛𝐴+1)
+E.1
+Traceable Interpretability
+Beyond robustness, PAMAS provides human-friendly interpretabil-
+ity. The hierarchical structure ensures that every decision is trace-
+able back to its rationale. At the top level, the Decision-Maker out-
+puts an explanation 𝑟𝐷, which summarizes the rationale underlying
+
+
+
+===== PAGE 12 =====
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+Zongwei Wang, Min Gao, Junliang Yu, Tong Chen & Chenghua Lin
+the final decision. If deeper inspection is required, human auditors
+can trace this explanation downward: Coordinators reveal interme-
+diate rationales aggregated from their subordinates, while Auditors
+expose information-specific insights such as sentiment shifts or
+statistical irregularities. This strict traceability enables immediate
+identification of which agent contributed to a judgment and why,
+ensuring accountability and supporting human–AI collaboration.
+In contrast, existing MAS (chain, star, or fully connected) suffer
+from either overly entangled communication, making responsibility
+attribution difficult, or lack of a strict hierarchy, which obscures
+accountability. Similarly, deep learning models typically require
+post-hoc explanation methods that are less faithful to the actual
+decision process.
+E.2
+Efficiency in Training and Inference
+PAMAS achieves efficiency gains in both training and inference,
+mainly by reducing token consumption in LLM-based agents.
+E.2.1
+Training Efficiency. Let 𝑁denote the batch size, 𝑝err the error
+rate, and 𝑛𝐴, 𝑛𝐶the numbers of Auditors and Coordinators, respec-
+tively. If each agent call requires 𝑇tokens, then without topology
+adaptation and targeted correction, the training cost consists of two
+parts: forward inference, where all 𝑛𝐴auditors and the Decision-
+Maker participate, costing 𝑁· (𝑛𝐴+ 1) · 𝑇, and refinement, where
+all 𝑛𝐴+𝑛𝐶agents update their memories, costing 𝑁· (𝑛𝐴+𝑛𝐶) ·𝑇.
+Thus the total cost is 𝑁·
+
+(𝑛𝐴+ 1) + (𝑛𝐴+ 𝑛𝐶)
+
+· 𝑇.
+With topology adaptation, the system prunes redundant agents,
+reducing the number of auditors and coordinators from (𝑛𝐴,𝑛𝐶) to
+( ˜𝑛𝐴, ˜𝑛𝐶), and introduces new ones only when correlated failures
+emerge. Moreover, with targeted correction, only misclassified sam-
+ples trigger updates. The forward cost remains 𝑁· ( ˜𝑛𝐴+ 1) · 𝑇,
+while the refinement cost reduces to 𝑁· 𝑝err · ( ˜𝑛𝐴+ ˜𝑛𝐶) · 𝑇, where
+typically 𝑝err ≪1, further balancing efficiency and robustness.
+E.2.2
+Inference Efficiency. If every inference activates all agents,
+the token cost is dominated by Auditors and the Decision-Maker,
+yielding ( ˜𝑛𝐴+ 1) ·𝑇. Coordinators do not require LLM calls during
+inference since they only read from the confidence memory. PAMAS
+instead employs confidence-guided routing, which activates only
+the most confident branches until a majority consensus is reached.
+If the decision is resolved after 𝑘≪( ˜𝑛𝐴+ 1) activations, the cost
+reduces to 𝑘· 𝑇, resulting in substantial token savings without
+compromising accuracy.
+E.2.3
+Comparison with Other MAS Topologies. Other multi-agent
+structures, such as chain, star, fully connected, layered, and tree
+architectures, all require different token costs depending on their
+communication pattern. Table 3 summarizes the training and in-
+ference costs across representative topologies. It can be seen that
+PAMAS, when equipped with topology adaptation, targeted correc-
+tion and confidence-guided routing, achieves substantially lower
+costs than all baselines.

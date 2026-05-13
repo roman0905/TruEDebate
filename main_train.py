@@ -167,6 +167,35 @@ def main():
         "--scra_weight", type=float, default=None,
         help="V7: SupCon 损失权重"
     )
+    # V8 模块开关
+    parser.add_argument(
+        "--no_xpcr", action="store_true",
+        help="V8: 禁用 Cross-Perspective Consensus Regularization"
+    )
+    parser.add_argument(
+        "--xpcr_weight", type=float, default=None,
+        help="V8: XPCR 损失权重（默认 0.1）"
+    )
+    parser.add_argument(
+        "--no_datr", action="store_true",
+        help="V8: 禁用 Disagreement-Aware Test-Time Routing"
+    )
+    parser.add_argument(
+        "--datr_alpha", type=float, default=None,
+        help="V8: DATR 主/辅 logits 融合权重（默认 0.3）"
+    )
+    parser.add_argument(
+        "--use_kdpe", action="store_true",
+        help="V8: 启用 Knowledge Distillation from PAMD-Ensemble（需先准备 teacher probs）"
+    )
+    parser.add_argument(
+        "--kdpe_weight", type=float, default=None,
+        help="V8: KDPE 损失权重（默认 0.5）"
+    )
+    parser.add_argument(
+        "--kdpe_teacher", type=str, default=None,
+        help="V8: KDPE teacher probs .npy 路径"
+    )
     parser.add_argument(
         "--no_typed_edges", action="store_true",
         help="禁用 edge_type 边类型嵌入，用于消融实验"
@@ -223,6 +252,21 @@ def main():
         config.USE_SCRA = False
     if args.scra_weight is not None:
         config.SCRA_WEIGHT = args.scra_weight
+    # V8 覆盖
+    if args.no_xpcr:
+        config.USE_XPCR = False
+    if args.xpcr_weight is not None:
+        config.XPCR_WEIGHT = args.xpcr_weight
+    if args.no_datr:
+        config.USE_DATR = False
+    if args.datr_alpha is not None:
+        config.DATR_ALPHA = args.datr_alpha
+    if args.use_kdpe:
+        config.USE_KDPE = True
+    if args.kdpe_weight is not None:
+        config.KDPE_WEIGHT = args.kdpe_weight
+    if args.kdpe_teacher is not None:
+        config.KDPE_TEACHER_PROBS_PATH = args.kdpe_teacher
 
     set_seed(args.seed)
 
@@ -328,6 +372,9 @@ def main():
     logger.info(f"  FNACA:       {getattr(config, 'USE_FNACA', False)}")
     logger.info(f"  SCCG:        {getattr(config, 'USE_SCCG', False)}")
     logger.info(f"  SCRA:        {getattr(config, 'USE_SCRA', False)} (w={getattr(config, 'SCRA_WEIGHT', 0)})")
+    logger.info(f"  XPCR:        {getattr(config, 'USE_XPCR', False)} (w={getattr(config, 'XPCR_WEIGHT', 0)})")
+    logger.info(f"  DATR:        {getattr(config, 'USE_DATR', False)} (alpha={getattr(config, 'DATR_ALPHA', 0)})")
+    logger.info(f"  KDPE:        {getattr(config, 'USE_KDPE', False)} (w={getattr(config, 'KDPE_WEIGHT', 0)}, T={getattr(config, 'KDPE_TEMPERATURE', 0)})")
     logger.info("=" * 60)
 
     # 更新全局梯度累积配置

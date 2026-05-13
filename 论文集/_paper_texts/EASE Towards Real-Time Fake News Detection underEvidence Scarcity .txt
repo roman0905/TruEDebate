@@ -1,0 +1,1879 @@
+
+
+===== PAGE 1 =====
+Towards Real-Time Fake News Detection under Evidence Scarcity
+Guangyu Wei∗
+Nanjing University‡
+Ocean University of China
+Suzhou, China
+wgy3129@stu.ouc.edu.cn
+Ke Han∗
+University of Trento
+Trento, Italy
+ke.han@unitn.it
+Yueming Lyu†
+Nanjing University
+Suzhou, China
+ymlv@nju.edu.cn
+Yu Luo
+Ocean University of China
+Qingdao, China
+luoyu@stu.ouc.edu.cn
+Yue Jiang
+Chinese Academy of Sciences
+Beijing, China
+yue.jiang@cripac.ia.ac.cn
+Caifeng Shan
+Nanjing University
+Suzhou, China
+cfshan@nju.edu.cn
+Nicu Sebe
+University of Trento
+Trento, Italy
+niculae.sebe@unitn.it
+Abstract
+Fake news detection becomes particularly challenging in real-time
+scenarios, where emerging events often lack sufficient supporting
+evidence. Existing approaches often rely heavily on external evi-
+dence and therefore struggle to generalize under evidence scarcity.
+To address this issue, we propose Evaluation-Aware Selection of Ex-
+perts (EASE), a novel framework for real-time fake news detection
+that dynamically adapts its decision-making process according to
+the assessed sufficiency of available evidence. EASE introduces a se-
+quential evaluation mechanism comprising three independent per-
+spectives: (1) Evidence-based evaluation, which assesses evidence
+and incorporates it into decision-making only when the evidence
+is sufficiently supportive; (2) Reasoning-based evaluation, which
+leverages the world knowledge of large language models (LLMs)
+and applies them only when their reliability is adequately estab-
+lished; and (3) Sentiment-based fallback, which integrates sentiment
+cues when neither evidence nor reasoning is reliable. To enhance
+the accuracy of evaluation processes, EASE employs instruction
+tuning with pseudo labels to guide each evaluator in justifying its
+perspective-specific knowledge through interpretable reasoning.
+Furthermore, the expert modules integrate the evaluators’ justi-
+fied assessments with the news content to enable evaluation-aware
+decision-making, thereby enhancing overall detection accuracy.
+∗Equal contribution.
+†Corresponding Author
+‡Work done while interning at Nanjing University.
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission
+and/or a fee. Request permissions from permissions@acm.org.
+xx, xx
+© 2018 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 978-1-4503-XXXX-X/2018/06
+https://doi.org/XXXXXXX.XXXXXXX
+Moreover, we introduce RealTimeNews-25, a new benchmark com-
+prising recent news for evaluating model generalization on emerg-
+ing news with limited evidence. Extensive experiments demon-
+strate that EASE not only achieves state-of-the-art performance
+across multiple benchmarks, but also significantly improves gen-
+eralization to real-time news. The code and dataset are available:
+https://github.com/wgyhhhh/EASE.
+CCS Concepts
+• Security and privacy →Human and societal aspects of se-
+curity and privacy; Social aspects of security and privacy.
+Keywords
+Fake news detection, evidence scarcity, evidence evaluation
+ACM Reference Format:
+Guangyu Wei, Ke Han, Yueming Lyu, Yu Luo, Yue Jiang, Caifeng Shan,
+and Nicu Sebe. 2018. Towards Real-Time Fake News Detection under Ev-
+idence Scarcity. In Proceedings of Make sure to enter the correct conference
+title from your rights confirmation email (xx). ACM, New York, NY, USA,
+12 pages. https://doi.org/XXXXXXX.XXXXXXX
+1
+Introduction
+With the rapid growth of web-based media such as online news
+platforms and social networks, misinformation spreads at unprece-
+dented speed and scale. The circulation of fake news on the Web
+poses significant risks to politics [28], economy [17], and public
+safety [15]. Therefore, developing automated fake news detection
+methods is essential for maintaining information integrity and trust-
+worthiness on the Web, making this research highly relevant to the
+Web community.
+Traditional fake news detection approaches [4, 16, 26, 32] typ-
+ically rely solely on news content for decision-making, which
+often limits their generalizability to unseen news due to out-of-
+distribution issues. To overcome this limitation, recent studies have
+explored retrieval-augmented methods that retrieve external evi-
+dence from web-scale or structured repositories to support decision-
+making [3, 13, 22, 25, 35].
+arXiv:2510.11277v1  [cs.CL]  13 Oct 2025
+
+
+
+===== PAGE 2 =====
+xx, xx, xx
+Guangyu Wei et al.
+News-1: Camels have their limbs cut off and are used as begging 
+props on the streets of cities.
+1. Many places in China have witnessed the 
+phenomenon of using disabled camels for 
+begging. [People.cn]
+2. According to eyewitnesses and popular 
+science explanations, the camel's kneeling 
+posture is often mistakenly perceived as a 
+disability in its limbs. [Baike.baidu.com]
+(a) Conflicting Evidence
+News-2: SHOCKING MANHUNT: Trump in Peril as Deep 
+State Assassins Hunt Conservatives! 
+The news lacks sufficient evidence and cannot 
+be verified based on the current information.
+(b) Absent Evidence
+Figure 1: Examples of limited supporting evidence: (a) con-
+flicting information across different sources, and (b) the ab-
+sence of relevant evidence.
+However, real-time news, where timeliness is a defining char-
+acteristic, typically involves emerging or rapidly evolving events.
+In such scenarios, news items are rarely fact-checked immediately,
+as supporting evidence is often scarce, unreliable, or entirely un-
+available. This lack of evidence makes evidence-based approaches
+struggle to produce accurate predictions, thereby limiting their
+applicability to real-time detection settings. To address this chal-
+lenge, this paper investigates real-time fake news detection
+with limited supporting evidence, aiming to enhance detection
+effectiveness in real-world, time-sensitive contexts.
+Specifically, we systematically address three key challenges in
+this largely underexplored area:
+1) Evaluating the sufficiency of retrieved evidence. While pre-
+vious studies often assess evidence credibility based primarily on
+source reliability [1, 2, 8, 20], emerging events frequently lack veri-
+fied information from authoritative outlets, limiting the effective-
+ness of such approaches. Furthermore, evidence collected from
+unofficial or unverified sources is often informal, conflicting, or
+even absent (as illustrated in Fig. 1 (1) and (2)), which may cause
+models to draw unreliable conclusions.
+2) Handling insufficient or unreliable evidence. When eviden-
+tial support is lacking, designing an effective fallback mechanism
+that allows models to assess news authenticity from alternative
+perspectives remains a critical yet unresolved challenge.
+3) Evaluating model generalization under evidence scarcity. Ex-
+isting public benchmarks composed primarily of historical news
+[11, 19, 23], where abundant evidence or prior knowledge is avail-
+able to verify authenticity. However, real-time fake news detection
+requires evaluation on recent and dynamically evolving news data
+to more accurately assess model generalization under the practical
+challenge of evidence scarcity.
+To address these challenges, we propose Evaluation-Aware
+Selection of Experts (EASE), a novel framework for real-time
+fake news detection. EASE introduces a sequential evaluation mech-
+anism that assesses the quality of available evidence and adaptively
+selects the most appropriate decision-making strategy for each
+news instance. Specifically, it dynamically incorporates three inde-
+pendent perspectives: 1) Evidence-based: An evaluator performs
+large-scale online retrieval of external evidence and thoroughly an-
+alyzes their usability. If the retrieved evidence is deemed sufficiently
+supportive, an evidence expert leverages it, along with the evalua-
+tor’s justification, to make authenticity predictions. 2) Reasoning-
+based: When external evidence is insufficient, EASE activates the
+internal reasoning capabilities of large language models (LLMs) to
+infer conclusions using world knowledge. A reasoning evaluator
+examines the reliability of the inferred logic before authorizing a
+reasoning expert to make a final decision. 3) Sentiment-based:
+If neither evidence nor reasoning provides reliable verification, a
+sentiment expert serve as a fallback strategy to examine emotional
+tone, subjectivity, and stylistic cues for authenticity assessment.
+More importantly, both the evaluator and expert modules are
+carefully designed to ensure reliability and interpretability. In-
+stead of directly employing LLMs as evaluators, we propose an
+instruction-tuning strategy coupled with pseudo-label supervision
+to fine-tune LLMs. This process provides feedback to the model’s
+outputs, guiding it to rigorously justify the reliability of perspective-
+specific knowledge and to generate faithful, interpretable reasoning
+rather than speculative explanations. Meanwhile, the expert mod-
+ules are designed not to rely solely on available knowledge for
+decision-making but to integrate the justified evaluations from the
+evaluators with their interactions with the news content, thereby
+enhancing overall decision accuracy and robustness.
+Moreover, to advance research on real-time fake news detection,
+we introduce a new benchmark, RealTimeNews-25, consisting of
+3,487 news articles collected between June 2024 and September 2025.
+The dataset covers recent and rapidly evolving events characterized
+by limited supporting evidence, providing a challenging and timely
+benchmark for evaluating model robustness in real-world, time-
+sensitive scenarios.
+We conduct extensive experiments on RealTimeNews-25 and
+the widely used benchmarks Weibo [11], Weibo21 [19] and Gossip-
+Cop [23]. Experimental results show that our approach not only
+achieves state-of-the-art accuracy on historical news but also sub-
+stantially improves generalization to real-time news with limited
+evidence, highlighting its effectiveness in practical scenarios. The
+main contributions of this paper are summarized as follows:
+• We systematically investigate real-time fake news detection
+under evidence scarcity, a rarely explored yet highly practical
+problem. We propose EASE, a novel framework that dynam-
+ically evaluates evidence quality and adaptively selects the
+most trustworthy knowledge for decision-making.
+• We design an evaluator–expert training paradigm that fine-
+tunes LLMs via instruction tuning with pseudo labels, en-
+abling evaluation-aware expert selection based on news char-
+acteristics and perspective-specific knowledge.
+• We construct RealTimeNews-25, a new benchmark dataset
+of emerging news events, to evaluate model generalization
+in real-world, time-sensitive scenarios.
+
+
+
+===== PAGE 3 =====
+Towards Real-Time Fake News Detection under Evidence Scarcity
+xx, xx, xx
+• Extensive experiments demonstrate that EASE achieves state-
+of-the-art performance on historical news across existing
+benchmarks, and significantly enhances generalization to
+real-time news with limited evidence.
+2
+Related Work
+Fake News Detection. Existing approaches can generally be di-
+vided into two categories based on their use of external knowledge:
+content-based methods, which rely solely on news content, and
+knowledge-based methods, which incorporate additional informa-
+tion such as external evidence [14, 21], user comments [24, 34], or
+media background [33].
+1) Content-based approaches. These methods primarily analyze
+intrinsic features of news content, such as writing style, emotional
+tone, and image–text consistency. For example, UEEI constructs an
+affective enhancement graph to model emotional conflicts between
+news and user comments [29]. FND-CLIP leverages a pre-trained
+CLIP model to guide multimodal information fusion [37], while
+MIMoE-FND introduces a mixture-of-experts mechanism that adap-
+tively customizes fusion strategies for different scenarios [16]. How-
+ever, these approaches heavily depend on specific training data,
+leading to limited generalization [38] and weak interpretability.
+2) Knowledge-based approaches. These methods utilize external
+information to assist in verification. For instance, GET proposes a
+unified evidence-graph-based framework for fake news detection
+[30], MUSER introduces a multi-step evidence retrieval framework
+that simulates human reasoning during news verification [14], and
+SEE integrates attention mechanisms with early termination to im-
+prove the use of unlabeled evidence [31]. ARG further incorporates
+LLM-generated rationales into a trainable detection framework
+[9]. Although these models capture dependencies between external
+evidence and news content, they are often hindered by evidence
+scarcity or unreliability, particularly in real-time news detection
+where timely and trustworthy information is lacking.
+Fact-Checking. Fact-checking focuses on verifying the factual
+accuracy of claims, typically by leveraging external knowledge.
+For instance, Hiss decomposes complex claims into sub-claims and
+verifies them sequentially using retrieved evidence [35]. DEFAME
+[3] and Veract Scan [20] incorporate LLMs and web-based knowl-
+edge sources into verification pipelines to enhance performance.
+However, their dependence on external knowledge suffers from
+insufficient or unreliable knowledge. When knowledge is lacking,
+most fact-checking systems label a claim as unverifiable, which
+limits their applicability to fake news detection, especially in real-
+time contexts where authoritative evidence is often unavailable. For
+example, experiments on our RealTimeNews-25 dataset show that
+Hiss [35], Veract Scan [20], and DEFAME [3] output “Not Enough
+Information” labels for 49.6%, 33.0%, and 45.6% of news samples,
+respectively, highlighting the challenge of evidence scarcity in real-
+time scenarios.
+Evidence Credibility Evaluation. To address the issue of unreli-
+able evidence, prior studies have explored credibility assessment
+mechanisms, primarily focused on evaluating the reliability of evi-
+dence sources. For example, Ge et al. [8] analyze media contexts
+to incorporate source credibility into fact-checking systems, while
+Baly et al. [1, 2], Niu et al. [20] train classifiers using various features
+of media outlets to assess their trustworthiness. However, in real-
+time news detection, emerging events often lack reliable sources
+due to their immediacy, making source-based evaluation less ef-
+fective. In contrast, our approach evaluates both evidence content
+and source reliability from multiple perspectives, such as consis-
+tency, sufficiency, and credibility, to achieve a more comprehensive
+assessment. Moreover, EASE introduces fallback mechanisms to
+handle scenarios with insufficient or unreliable evidence.
+3
+Methodology
+In this work, we propose Evaluation-Aware Selection of Experts
+(EASE), a novel framework for real-time fake news detection under
+evidence scarcity.
+As illustrated in Fig. 2, to address the potential scarcity or unreli-
+ability of evidence in real-time news, EASE introduces a sequential
+evaluation and expert selection pipeline from three perspectives: 1)
+Evidence-based decision: An evaluator first assesses the sufficiency
+of retrieved evidence. When the evidence is deemed sufficient, an
+expert leverages both the evidence and the evaluator’s justification
+for final decision-making. 2) Reasoning-based decision: If the ev-
+idence is insufficient, a reasoning evaluator examines the quality
+of internally generated reasoning knowledge from LLMs. When
+this reasoning is reliable, the corresponding expert is activated for
+decision-making. 3) Sentiment-based decision: When both evidence
+and reasoning are unreliable, a sentiment expert acts as a fallback,
+analyzing emotional tone and linguistic cues in the news content
+to support the final decision.
+3.1
+Evidence-Based Decision-Making
+EASE prioritizes evidence-based decision-making for verifying
+news authenticity, as external evidence typically provides the most
+reliable basis for judgment. However, since such evidence is of-
+ten insufficient or unreliable for emerging events and weakens
+its effectiveness, EASE introduces an evidence evaluator to as-
+sess whether the retrieved evidence is sufficiently supportive for
+decision-making.
+3.1.1
+Evidence Evaluator. (1) Evidence Agent. To gather ex-
+ternal information, we employ an evidence agent that retrieves
+and summarizes web-based evidence. Rather than relying on a
+single-pass search, the agent performs iterative retrieval guided
+by in-context prompting of LLMs [7]. As illustrated in Figure 4,
+the agent: (1) generates search queries conditioned on the news
+content; (2) leverages Google Search via the Serper API1 to provide
+the top 3 relevant web pages matching the query; (3) scrape the
+corresponding page using Firecrawl2, then summarize and assess
+its relevance and reliability; and (4) repeats the retrieval process
+when the collected evidence is deemed insufficient, up to a prede-
+fined iteration limit. This iterative mechanism allows the agent to
+progressively refine the evidence set, ensuring both coverage and
+quality.
+(2) Evidence Sufficiency Evaluation. To assess the sufficiency
+and reliability of retrieved evidence, we leverage the advanced rea-
+soning capabilities of ChatGPT-4 through a set of structured evalua-
+tion prompts, as illustrated in Box A.3. These prompts are designed
+1https://serper.dev
+2https://github.com/mendableai/firecrawl
+
+
+
+===== PAGE 4 =====
+xx, xx, xx
+Guangyu Wei et al.
+Agent
+Step 2: Knowledge Evaluation and Expert Selection 
+   Step 1: Perspective-Specific Knowledge Generation
+News
+Perspective 1: External Evidence
+- Consistency: ...
+- Sufficiency: ...
+- Credibility: …
+Output: [Judgement]+[Rationale]
+Evidence Evaluator
+- Sufficiency: ...
+- Confidence: ...
+- Plausibility: ...
+Output: [Judgement]+[Rationale]
+Reasoning Evaluator
+Insufficient
+Sufficient
+Perspective 2: Reasoning Knowledge
+Perspective 3: Sentiment Analysis
+The news  is filled with emotional...
+Input: {News}, {Reasoning}
+Input: {News}, {Evidence}
+Reliable
+Unreliable
+Step3: Expert Decision-Making
+Input:
+{News}
+{Evidence}
+{Rationale}
+Analyzer
+Coordinator
+Classifier
+News
+Evidence
+Rationale
+Et
+Xt
+Rt
+Ft
+Vx
+Ve&x
+Vex
+Expert Structure
+Masked Attention
+REAL
+FAKE
+Evidence Expert
+Reasoning Expert
+Input:
+{News}
+{Reasoning}
+{Rationale}
+Sentiment Expert
+Input:
+{News}
+{Sentiment}
+{Rationale}
+REAL
+FAKE
+REAL
+FAKE
+Concat
+Concat
+Figure 2: The Evaluation-Aware Selection of Experts (EASE) framework. EASE first employs an evidence-based strategy, where
+(1) the evidence agent retrieves external evidence, (2) the evaluator assesses its sufficiency, and (3) the evidence expert makes the
+final decision. When the evidence is insufficient, EASE switches to a reasoning-based strategy that mirrors the evidence-based
+pipeline, generating and evaluating reasoning knowledge for decision-making. If the reasoning knowledge is unreliable, EASE
+activates a sentiment-based strategy, which analyzes stylistic and emotional cues to produce the final judgment.
+to comprehensively evaluate source credibility, evidence relevance,
+and inter-evidence consistency, thereby ensuring a rigorous and
+systematic assessment process. However, since ChatGPT operates
+as a black-box model without transparency or reproducibility, its
+direct outputs are unsuitable for deployment. Instead, we treat
+ChatGPT’s evaluations as pseudo-labeled supervision signals to
+train an open-source backbone, Qwen2.5-14B-Instruct. This design
+allows the model to acquire task-specific reasoning and evaluation
+capabilities while preserving interpretability and reproducibility.
+(3) Instruction-Tuning. We construct training tuples (𝑋𝑡, 𝐸𝑡,𝐶𝑡,𝐶𝑟),
+where 𝑋𝑡denotes the news item, 𝐸𝑡represents the evidence re-
+trieved by the agent, and (𝐶𝑡,𝐶𝑟) correspond to the pseudo-labeled
+sufficiency label and its rationale generated by ChatGPT. Using
+these tuples, we fine-tune Qwen2.5-14B-Instruct via LoRA (Low-
+Rank Adaptation of Large Language Models) [10], updating only
+low-rank adapter matrices while freezing the original model param-
+eters. This approach enables efficient adaptation to the evidence
+evaluation task, effectively integrating external pseudo supervision
+into an interpretable, open-source LLM framework.
+3.1.2
+Evaluation-Aware Evidence Expert. When the evaluator
+determines that the retrieved evidence is sufficiently supportive,
+the evidence expert is activated to transform evidence assessment
+into actionable decision-making. The evaluator transfers both the
+evidence 𝐸𝑡and its reasoning rationale 𝑅𝑡, which describes the relia-
+bility and sufficiency of each evidence item, including justifications
+for trustworthy sources and concerns about potentially unreliable
+ones, to the expert for final judgment.
+Unlike conventional detectors that rely solely on confidence
+scores obtained by assessing media credibility for evidence [8],
+our expert explicitly models the dependency between the evidence
+and its evaluation rationale. This design enables evaluation-aware
+reasoning, allowing the expert to adapt its decisions based on inter-
+pretable evidence-quality assessments grounded in a logical chain
+of reasoning. As illustrated in Figure 2, the expert comprises three
+components, detailed as follows.
+1) Evidence Analyzer. To capture the interaction between the evi-
+dence 𝐸𝑡and its evaluation rationale 𝑅𝑡, we introduce an evidence
+analyzer formulated as:
+ˆ𝐶𝑡= sigmoid(MLP(Ft)),
+𝐿𝑎= 𝐿𝑐𝑒( ˆ𝐶𝑡,𝐶𝑡),
+(1)
+where Ft denotes the BERT-encoded representation of the concate-
+nated text [𝐸𝑡;𝑅𝑡]; ˆ𝐶𝑡is the predicted sufficiency label; and 𝐿𝑐𝑒is
+the cross-entropy loss. This formulation allows the expert to inter-
+nalize the evaluator’s reasoning process and adaptively calibrate its
+reliance on evidence, thereby improving robustness to unreliable
+or noisy external information.
+2) News–Evidence Coordinator. To effectively leverage exter-
+nal evidence for detecting news authenticity, we design a news-
+evidence coordinator to model the semantic dependencies between
+news and evidence and to facilitate a more comprehensive under-
+standing of their relationships. The coordinator is implemented
+using a cross-attention mechanism, formulated as:
+fcross(Q, K, V) = softmax
+ QK𝑇
+√𝑑𝑘
+
+V,
+(2)
+ve&x = fcross(F𝑡, X𝑡, X𝑡).
+(3)
+where Q, K, and V represent the query, key, and value matrices,
+respectively.
+3) Prediction Classifier. A masked attention mechanism [10]
+is applied to the news representation X𝑡to filter out irrelevant
+or noisy tokens, producing a refined representation vx. Finally, a
+classifier integrates both vx and the evidence-aware representation
+
+
+
+===== PAGE 5 =====
+Towards Real-Time Fake News Detection under Evidence Scarcity
+xx, xx, xx
+ve&x to predict news authenticity:
+𝐿𝑐𝑙𝑠= 𝐿𝑐𝑒(MLP([vx; ve&x]),𝑦),
+(4)
+where [·] denotes concatenation and 𝑦∈{0, 1} is the ground-truth
+label of news authenticity. The overall loss for training the expert
+is expressed as:
+𝐿= 𝛼𝐿𝑎+ 𝐿𝑐𝑙𝑠,
+(5)
+where 𝛼is a weighting coefficient.
+3.2
+Reasoning and Sentiment-Based Fallback
+Reasoning-Based Evaluator and Expert. When external evi-
+dence is insufficient, EASE discards the evidence and activates a
+reasoning-based strategy, which leverages the world knowledge and
+logical reasoning capabilities of LLMs to make judgments. Similar
+to external evidence, the reasoning knowledge produced by LLMs
+can also be unreliable due to hallucinations. To address this, the
+reasoning-based strategy mirrors the evidence-based framework
+by incorporating an evaluator for reasoning knowledge evaluation
+and a reasoning expert for decision-making.
+Specifically, a reasoning agent first generates inference chains
+from the LLM for each news piece. The reasoning evaluator and
+expert are then trained using an instruction-tuning strategy simi-
+lar to that employed in the evidence-based strategy. The prompts
+designed for the reasoning agent and evaluation are shown in
+Boxes A.1 and A.4.
+Sentiment Expert. When both evidence and reasoning are deemed
+unreliable, EASE activates a fallback mechanism based on sentiment
+analysis. As shown in Box A.2, the sentiment expert examines stylis-
+tic and emotional cues in the text, such as exaggerated, provocative,
+or biased expressions, to provide subjective signals that go beyond
+the factual content of the news. It shares the same structural design
+as the evidence- and reasoning-based experts.
+This cascaded architecture is trained in an end-to-end manner,
+forming a robust, flexible, and interpretable decision pipeline tai-
+lored to each news instance based on the availability and reliability
+of external information.
+4
+RealTimeNews-25 Benchmark
+To facilitate the research of real-time fake news detection, we in-
+troduce a new RealTimeNews-25 benchmark that comprises recent
+news released in the past year.
+Data Collection. We collected news articles from sources such
+as NBC News and BBC News, covering the period from June 2024
+to September 2025. These articles span diverse domains, including
+politics, sports, and business. Moreover, most articles fall beyond the
+knowledge cutoffs of the LLMs used, which helps prevent potential
+data contamination in the model’s internal knowledge.
+Data Synthesis Pipeline. To generate instances of fake news,
+we utilize an LLM-based synthesis pipeline that modifies names,
+locations, and dates; interprets information out of context; alters
+writing styles; and inserts factual errors, such as using “America”
+instead of “Germany”. Each sample is manually verified against its
+true counterpart to ensure the presence of factual inaccuracies or
+logical inconsistencies.
+Importantly, to better simulate real-world real-time fake news
+detection, we mask the true source of each news item during
+evidence retrieval. This design 1) reflects practical scenarios where
+newly emerging news typically lack authoritative evidence, and
+2) prevents information leakage by ensuring the model cannot
+rely on the news source itself for classification. Under this setting,
+the model must retrieve and reason over alternative sources for
+supporting evidence.
+Comparison with Existing Benchmarks. As shown in Table 1,
+existing benchmarks consist primarily of historical news released
+several years ago, whereas RealTimeNews-25 includes 3,487 more
+recent news articles. To assess the degree of evidence scarcity across
+benchmarks, we randomly sample 100 news items from each dataset
+and manually determine whether any retrieved evidence is reliable
+based on human judgment. We define the evidence scarcity ratio
+as the proportion of news items without reliable evidence to the
+total number of samples. RealTimeNews-25 exhibits a scarcity ratio
+of 0.37, approximately twice that of other benchmarks. Although the
+ratio of 0.37 is not particularly high, it reflects the inherent difficulty
+of collecting real-time news with reliable labels, while still offering
+valuable insights into fake news detection under evidence scarcity.
+5
+Experiments
+5.1
+Experiment Setup
+Implementation Details. (1) Agents. The agents for evidence
+retrieval, reasoning knowledge generation, and sentiment analysis
+use GPT-4o3 for English datasets and Qwen2.5-VL4 as the back-
+bone for Chinese datasets, respectively. Each agent is guided by
+task-specific prompts and interacts through the official APIs. The
+prompts used for reasoning knowledge and sentiment acquisition
+are provided in Appendix A. The evidence retrieval process is lim-
+ited to a maximum of 3 iterations. (2) Evaluators. The evidence and
+reasoning evaluators are built on Qwen2.5-14B-Instruct5 for Chi-
+nese datasets and Llama-3.1-8B-Instruct6 for English datasets. All
+models are trained for two epochs using the AdamW optimizer [18]
+with LoRA fine-tuning [10], a batch size of 4, and initial learning
+rates of 10−4 and 5 × 10−5, for Chinese and English datasets, re-
+spectively. Training is performed on two NVIDIA A6000 GPUs. (3)
+Experts. We adopt BERT [6] as the text encoder in the expert mod-
+ule, using the bert-base-uncased”7 checkpoint for English datasets
+and the bert-base-chinese”8 checkpoint for Chinese datasets. The
+maximum token length is set to 256, truncating longer sequences.
+Models are optimized with the Adam optimizer [12], a learning rate
+of 2 × 10−4 and a weight decay of 5 × 10−5. The hidden dimension
+𝑑𝑘is 768. Early stopping with a patience of five epochs is applied
+to mitigate overfitting. The loss weighting factor 𝛼is set to 2 for
+Chinese datasets and 1 for English datasets.
+Evaluation Metrics. We report accuracy (Acc.), macro F1 (macF1),
+and class-wise F1 scores for the fake and real classes (F1fake and
+F1real).
+3https://openai.com/
+4https://bailian.console.aliyun.com/
+5https://huggingface.co/Qwen/Qwen2.5-14B-Instruct
+6https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct
+7https://huggingface.co/google-bert/bert-base-uncased
+8https://huggingface.co/google-bert/bert-base-chinese
+
+
+
+===== PAGE 6 =====
+xx, xx, xx
+Guangyu Wei et al.
+Table 1: Comparison of fake news detection benchmarks.
+Datasets
+Language
+Period
+#Real
+#Fake
+Evidence Scarcity Ratio
+Weibo [11]
+Chinese
+2020
+4749
+4779
+0.21
+Weibo21 [19]
+Chinese
+2021
+4640
+4487
+0.19
+GossipCop [23]
+English
+2017
+10259
+2581
+0.15
+RealTimeNews-25
+English
+2024-2025
+1963
+1524
+0.37
+5.2
+Comparison with State-of-the-Art Methods
+We conduct experiments on three widely used fake news detec-
+tion benchmarks, Weibo [11], Weibo21 [19], and GossipCop [23],
+to evaluate model performance on historical news with relatively
+sufficient external evidence. In addition, we evaluate our newly
+introduced RealTimeNews-25 benchmark to assess model perfor-
+mance on more recent news under evidence scarcity.
+As shown in Table 2, we systematically compare representative
+state-of-the-art (SOTA) models for fake news detection and fact-
+checking, which are grouped into two categories based on whether
+they incorporate external knowledge. When evidence is insufficient,
+fact-checking models such as Hiss [35], Veract Scan [20], and DE-
+FAME [3] output “Not Enough Information (NEI)”, which we treat
+as “Fake” when calculating detection accuracy. Statistically, these
+models produce NEI labels for 49.6%, 33.0%, and 45.6% of the news
+samples on RealTimeNews-25, respectively, reflecting the challenge
+posed by evidence scarcity in real-time scenarios.
+Historical News Detection. EASE consistently outperforms all
+competing methods across all evaluation metrics on Weibo, Weibo21,
+and GossipCop, demonstrating its strong capability in detecting
+historical fake news where abundant external evidence is available.
+Real-Time News Detection. Compared with the three historical
+datasets, RealTimeNews-25 presents a more challenging setting,
+resulting in a substantial decline in detection accuracy across ex-
+isting SOTA methods due to their limited generalization ability
+to emerging events. We observe that methods leveraging external
+knowledge (marked with † in Table 2) generally achieve higher per-
+formance than those without, suggesting that external information
+helps mitigate out-of-distribution issues and improve generaliza-
+tion to unseen news. More importantly, EASE achieves an accuracy
+of 0.756, significantly outperforming comparable models. This im-
+provement can be attributed to its carefully designed mechanisms
+that effectively evaluate and address insufficient external evidence
+and mitigate unreliable reasoning knowledge.
+5.3
+Analysis of Expert Selection
+We analyze the ratios of experts selected for final decision-making
+in EASE across different datasets, as shown in Fig. 3 (a). Several
+insightful observations can be made:
+1) The evidence expert is consistently activated most frequently
+across all datasets, followed by the sentiment expert and the rea-
+soning expert, indicating that EASE primarily relies on retrieved
+evidence for decision-making. 2) The activation frequency of the ev-
+idence expert is noticeably lower on RealTimeNews-25 compared
+with the historical datasets, suggesting that real-time detection
+faces greater challenges in acquiring reliable supporting evidence.
+3) Interestingly, even when the true source of the news is masked
+Proportion (%)
+100
+80
+60
+40
+20
+Proportion 
+0
+(%)
+Expert Activation
+GossipCo
+RealTime 
+News-
+ Evidence
+ Reasoning
+ Sentiment
+2025
+p
+Weibo21
+Weibo
+(a)
+0
+20
+40
+60
+80
+100
+Accuracy (%)
+5.6% 25.6% 9.1%
+5.0% 26.2% 17.5%
+(b)
+Figure 3: (a) Activation ratios of different experts in EASE
+across datasets. (b) Evaluation accuracy of evaluators.
+represent the evidence evaluator before and after fine-tuning,
+respectively, while
+represent the reasoning evaluator
+before and after fine-tuning, respectively.
+during evidence retrieval on RealTimeNews-25, the evidence ex-
+pert remains the most active among all experts. This demonstrates
+that the evidence agent, through multi-source and multi-iteration
+retrieval, can still identify reliable or plausible evidence from alter-
+native sources.
+5.4
+Ablation Study
+5.4.1
+Effect of Perspective-Specific Experts. To evaluate the
+contribution of each expert in EASE, we conduct an ablation study
+by selectively removing one or two experts, as reported in Table 3.
+1) Single-expert removal. When removing one expert, exclud-
+ing the evidence expert leads to the largest performance drop in
+accuracy on RealTimeNews-25, Weibo, and GossipCop, underscor-
+ing the crucial role of external evidence in EASE. In contrast, on
+Weibo21, the greatest decline occurs when the sentiment expert is
+removed. Further analysis reveals that Weibo21 contains a large
+number of user-generated posts written in emotional and collo-
+quial language, where external evidence and structured reasoning
+are less informative. This highlights the importance of sentiment
+analysis in detecting community-driven rumors.
+2) Dual-expert removal. When two experts are removed and the
+model relies on a single expert, performance degrades significantly
+across all datasets. This indicates that depending solely on a sin-
+gle perspective without reliability evaluation severely limits the
+model’s decision-making ability. Overall, these results demonstrate
+the necessity of incorporating multiple complementary experts
+together with reliability-aware evaluation to achieve robust fake
+news detection.
+5.4.2
+Analysis of Evaluators. The LLM-based evaluators in EASE
+are fine-tuned with pseudo labels generated by ChatGPT using an
+instruction-tuning strategy. To assess their effectiveness, we inves-
+tigate three key questions: 1) Are the pseudo labels reliable? 2) Does
+fine-tuning improve the evaluators’ assessment accuracy? 3) Does
+fine-tuning further enhance the overall detection performance?
+The following experiments address these questions in sequence.
+1) Are the pseudo labels reliable? We conduct a human eval-
+uation to examine the consistency between ChatGPT-generated
+pseudo labels and human judgments. Ten annotators assessed the
+reliability of evidence for 100 randomly sampled news–evidence
+
+
+
+===== PAGE 7 =====
+Towards Real-Time Fake News Detection under Evidence Scarcity
+xx, xx, xx
+Table 2: Performance comparison on the real-time fake news detection dataset RealTimeNews-25 and three historical datasets:
+Weibo, Weibo21, and GossipCop. Models marked with † utilize external knowledge, while the others do not. Models marked
+with ‡ indicate fact-checking approaches, whereas the remaining ones are fake news detection models.
+Model
+RealTimeNews-25
+Weibo
+Weibo21
+GossipCop
+Acc.
+macF1
+F1fake
+F1real
+Acc.
+macF1
+F1fake
+F1real
+Acc.
+macF1
+F1fake
+F1real
+Acc.
+macF1
+F1fake
+F1real
+EANN [27]
+0.499
+0.444
+0.268
+0.619
+0.827
+0.827
+0.829
+0.825
+0.870
+0.869
+0.862
+0.875
+0.864
+0.757
+0.594
+0.920
+SAFE [36]
+0.544
+0.502
+0.356
+0.647
+0.762
+0.761
+0.774
+0.748
+0.905
+0.896
+0.901
+0.890
+0.838
+0.769
+0.643
+0.895
+CAFE [5]
+0.497
+0.474
+0.363
+0.585
+0.840
+0.840
+0.842
+0.837
+0.882
+0.881
+0.885
+0.876
+0.867
+0.754
+0.587
+0.921
+BMR [33]
+0.571
+0.558
+0.481
+0.635
+0.918
+0.909
+0.914
+0.904
+0.929
+0.926
+0.927
+0.925
+0.895
+0.813
+0.691
+0.936
+FND-CLIP [37]
+0.494
+0.428
+0.235
+0.622
+0.907
+0.908
+0.908
+0.907
+0.943
+0.943
+0.940
+0.946
+0.880
+0.783
+0.638
+0.928
+MIMoE-FND [16]
+0.501
+0.432
+0.235
+0.630
+0.928
+0.928
+0.928
+0.927
+0.956
+0.956
+0.955
+0.957
+0.895
+0.817
+0.698
+0.936
+GET† [30]
+-
+-
+-
+-
+0.666
+0.662
+-
+-
+0.847
+0.773
+-
+-
+-
+-
+-
+-
+SEE† [31]
+-
+-
+-
+-
+0.932
+0.932
+-
+-
+0.864
+0.807
+-
+-
+-
+-
+-
+-
+ARG† [9]
+0.557
+0.538
+0.443
+0.632
+0.904
+0.904
+0.901
+0.906
+0.932
+0.932
+0.933
+0.931
+0.863
+0.770
+0.624
+0.916
+Hiss†,‡ [35]
+0.621
+0.619
+0.590
+0.646
+-
+-
+-
+-
+0.652
+0.643
+-
+-
+0.798
+0.659
+0.432
+0.887
+Veract Scan†,‡ [20]
+0.612
+0.609
+0.574
+0.644
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+DEFAME†,‡ [3]
+0.698
+0.694
+0.729
+0.658
+0.831
+0.829
+0.811
+0.847
+0.819
+0.819
+0.825
+0.813
+0.822
+0.682
+0.471
+0.893
+EASE† (Ours)
+0.756
+0.754
+0.728
+0.779
+0.933
+0.933
+0.933
+0.932
+0.962
+0.962
+0.962
+0.961
+0.904
+0.836
+0.731
+0.942
+Table 3: Performance comparison of EASE against its variants with different expert modules ablated. The best results are
+highlighted in bold. Expert activation states are indicated by ✓(activated) and ✗(deactivated), with EE, RK, and SA representing
+the External Evidence, Reasoning Knowledge, and Sentiment Analysis experts, respectively.
+Expert
+RealTimeNews-25
+Weibo
+Weibo21
+GossipCop
+EE
+RK
+SA
+Acc.
+macF1
+F1fake
+F1real
+Acc.
+macF1
+F1fake
+F1real
+Acc.
+macF1
+F1fake
+F1real
+Acc.
+macF1
+F1fake
+F1real
+✓
+✗
+✗
+0.607
+0.591
+0.511
+0.672
+0.881
+0.881
+0.874
+0.888
+0.933
+0.933
+0.934
+0.932
+0.879
+0.787
+0.648
+0.927
+✗
+✓
+✗
+0.576
+0.554
+0.454
+0.653
+0.892
+0.892
+0.887
+0.897
+0.925
+0.925
+0.926
+0.924
+0.873
+0.782
+0.641
+0.923
+✗
+✗
+✓
+0.535
+0.515
+0.416
+0.614
+0.879
+0.879
+0.873
+0.884
+0.910
+0.910
+0.911
+0.909
+0.861
+0.774
+0.633
+0.915
+✓
+✓
+✗
+0.659
+0.652
+0.604
+0.700
+0.916
+0.917
+0.915
+0.918
+0.931
+0.931
+0.932
+0.930
+0.891
+0.813
+0.693
+0.933
+✓
+✗
+✓
+0.657
+0.650
+0.601
+0.698
+0.921
+0.921
+0.919
+0.922
+0.939
+0.940
+0.940
+0.939
+0.881
+0.795
+0.662
+0.928
+✗
+✓
+✓
+0.601
+0.585
+0.504
+0.667
+0.898
+0.897
+0.892
+0.901
+0.940
+0.940
+0.941
+0.938
+0.866
+0.767
+0.616
+0.919
+✓
+✓
+✓
+0.756
+0.754
+0.728
+0.779
+0.933
+0.933
+0.933
+0.932
+0.962
+0.962
+0.962
+0.961
+0.904
+0.836
+0.731
+0.942
+Table 4: Effects of 𝐿𝑎in different experts.
+𝐿𝑎
+RealTimeNews-2025
+Weibo
+Weibo21
+GossipCop
+Acc.
+macF1
+Acc.
+macF1
+Acc.
+macF1
+Acc.
+macF1
+Evidence Expert
+✗
+0.575
+0.570
+0.875
+0.875
+0.915
+0.916
+0.853
+0.764
+✓
+0.607
+0.591
+0.881
+0.881
+0.933
+0.933
+0.879
+0.787
+Reasoning Expert
+✗
+0.556
+0.549
+0.850
+0.850
+0.890
+0.891
+0.828
+0.739
+✓
+0.576
+0.554
+0.892
+0.892
+0.904
+0.903
+0.873
+0.782
+Sentiment Expert
+✗
+0.504
+0.494
+0.827
+0.827
+0.875
+0.875
+0.813
+0.716
+✓
+0.535
+0.515
+0.879
+0.879
+0.910
+0.910
+0.861
+0.774
+pairs per dataset, resulting in 400 samples in total. The evaluation
+criteria followed those used for prompting ChatGPT, as described
+in Box C (Appendix). A similar process was applied to reasoning
+knowledge. Results show that 93% of the samples received consis-
+tent reliability labels from both annotators and ChatGPT, indicating
+a strong alignment between human and model evaluations.
+2) Does fine-tuning improve the evaluators’ assessment ac-
+curacy? We further evaluate the evaluators’ reliability before and
+after fine-tuning through another round of human evaluation. Five
+annotators rated 400 samples (100 per dataset), following the same
+procedure as in the pseudo-label evaluation. A similar setup was
+used for the reasoning evaluator, substituting reasoning knowledge
+for external evidence. As shown in Figure 3 (b), both fine-tuned
+evidence and reasoning evaluators substantially improve accuracy,
+confirming that fine-tuning enhances their alignment with task-
+specific evaluation criteria and mitigates the noise in direct LLM
+outputs.
+3) Does fine-tuning enhance the overall detection accuracy?
+We compare the performance of EASE using evaluators with and
+without fine-tuning. As shown in Table 6, fine-tuned evaluators
+consistently yield higher accuracy across all datasets. This improve-
+ment validates that enhancing evaluator reliability directly strength-
+ens evaluation-aware decision-making in subsequent fake news
+detection.
+5.4.3
+Analysis of Losses. In addition to the primary classifica-
+tion loss 𝐿𝑐𝑙𝑠for news authenticity detection, EASE introduces an
+auxiliary loss 𝐿𝑎for the analyzer within each expert module. As
+shown in Table 4, removing 𝐿𝑎leads to a noticeable drop in de-
+tection accuracy across all datasets. This result confirms that 𝐿𝑎
+
+
+
+===== PAGE 8 =====
+xx, xx, xx
+Guangyu Wei et al.
+Table 5: Open-world real-time case study of EASE. News samples were collected in real time beyond datasets. EASE activates
+the evidence-, reasoning-, and sentiment-based experts for the three cases, respectively.
+News-1: UN personnel have been detained by Houthi forces, and Guterres strongly condemns the act.
+Guterres expressed deep concern about the safety of UN personnel in Yemen and reiterated his call for the
+Houthi authorities to immediately and unconditionally release all detained individuals. [Label: REAL]
+Evidence: UN personnel have been detained by Houthi forces in Yemen, and this action has been condemned
+by UN Secretary-General António Guterres.
+Evidence Evaluator: The evidence is reliable due to its authoritative source, comprehensive information,
+and consistent internal logic.
+Evidence Expert: REAL ✓
+News-2: On October 6th, a march occurred in the capital of Venezuela, Alaskan, with participation from
+social movement organizations, the People’s Front, community groups, and many citizens. A collective
+protest expressing opposition to external threats. [Label: FAKE]
+Evidence: The news lacks sufficient evidence and cannot be verified based on the current information.
+Evidence Evaluator: The evidence is unreliable due to insufficient evidence.
+Reasoning Knowledge: The capital of Venezuela is Caracas, not "Alaskan." Alaska is a state in the United
+States.
+Reasoning Evaluator: I have enough information to judge whether the news is real or not.
+Reasoning Expert: FAKE ✓
+News-3: Barcelona was hit by a terrifying power outage!
+The entire city was plunged into complete
+darkness for HOURS. I was in bed when the lights suddenly went out — total silence. At first, I thought it
+was a minor glitch, but it quickly became clear: this was BIG. Where has the government been? What have
+they been doing? [Label: FAKE]
+Evidence: Evidence retrieval indicates that a large-scale power outage occurred in Barcelona in April 2025,
+but there is no indication of a similar event recently.
+Evidence Evaluator: The evidence is unreliable because it contains contradictory information.
+Reasoning Knowledge: A large-scale power outage lasting several hours due to system overload or
+equipment aging is possible in major cities like Barcelona. However, without the specific time of the
+incident, I cannot make an accurate judgment.
+Reasoning Evaluator: I don’t have enough information to judge whether the news is real or not.
+Sentiment Analysis: The use of terms like "terrifying," "total silence," and "I was in bed" creates a tense
+atmosphere. This emotionally driven content is often used in misinformation to evoke an emotional
+response rather than convey factual information.
+Sentiment Expert: FAKE ✓
+enables experts to internalize both the knowledge and its evalua-
+tion from the evaluators, thereby enhancing their evaluation-aware
+decision-making ability rather than merely relying on externally
+provided assessments.
+Table 6: Effects of fine-tuning evaluators.
+Fine-Tuning
+Acc.
+macF1
+F1fake
+F1real
+Weibo
+✗
+0.893
+0.894
+0.895
+892
+✓
+0.933
+0.933
+0.933
+0.932
+Weibo21
+✗
+0.927
+0.927
+0.924
+0.929
+✓
+0.962
+0.962
+0.962
+0.961
+GossipCop
+✗
+0.874
+0.778
+0.631
+0.925
+✓
+0.904
+0.836
+0.731
+0.942
+RealTimeNews-25
+✗
+0.669
+0.664
+0.622
+0.706
+✓
+0.756
+0.754
+0.728
+0.779
+5.5
+Open-World Real-Time Case Study
+To further evaluate the real-world applicability of our method be-
+yond benchmark datasets, we conduct an open-world case study. As
+shown in Table 5, the selected news items were released in October
+2025, only a few days before paper submission, and thus exhibit
+a realistic challenge of evidence scarcity. To prevent information
+leakage, we masked the original sources from which the news was
+collected.
+In the first example, EASE successfully retrieves sufficient and
+relevant alternative evidence, enabling the evidence expert to make
+an accurate verification. The second example contains a factual
+inconsistency, where “Alaskan” is incorrectly mentioned as the cap-
+ital of Venezuela instead of “Caracas.” In this case, when external
+evidence is insufficient, the reasoning expert leverages common-
+sense knowledge to correctly identify the news as fake. The third
+example features an emotionally charged post describing a power
+outage in “Barcclona,” lacking temporal specifics and containing
+conflicting evidence. Here, logical reasoning offers limited support
+
+
+
+===== PAGE 9 =====
+Towards Real-Time Fake News Detection under Evidence Scarcity
+xx, xx, xx
+due to ambiguous factual grounding, but the sentiment expert ef-
+fectively recognizes exaggerated and emotionally biased language,
+leading EASE to correctly classify it as fake.
+These open-world cases demonstrate the strong robustness and
+generalizability of EASE in real-time fake news detection, even
+under conditions of scarce or unreliable supporting evidence.
+6
+Limitations
+1) Dataset limitations. Although we aim to study the evidence
+scarcity issue by collecting recent news from the past year, the
+degree of scarcity in RealTimeNews-25 (Table 1) is not significantly
+high, even though it surpasses existing benchmarks. This reflects
+the inherent difficulty of obtaining real-time news with reliable
+labels. Nevertheless, our open-world real-time case study (Table 5)
+demonstrates that EASE generalizes well to emerging news events.
+2) Method limitations. While we employ sentiment analysis as the
+final fallback mechanism, objectively written news lacking strong
+emotional cues can mislead the sentiment agent and expert, as
+shown in the failure case analysis in the Appendix. Future work
+will explore additional decision-making perspectives to improve
+robustness under such conditions.
+7
+Conclusion
+In this work, we systematically investigate the practical challenge
+of evidence scarcity in real-time fake news detection. We pro-
+pose EASE, a sequential, multi-perspective evaluation and decision-
+making framework designed to explicitly assess evidential suffi-
+ciency and handle cases with insufficient evidence. To support
+evaluation in real-world settings, we also introduce RealTimeNews-
+25, a new benchmark for real-time fake news detection. Exten-
+sive experiments on RealTimeNews-25, together with three public
+benchmarks, demonstrate the superior performance of EASE on
+historical news and its strong generalization ability to emerging
+real-time events.
+References
+[1] Ramy Baly, Georgi Karadzhov, Dimitar Alexandrov, James Glass, and Preslav
+Nakov. 2018. Predicting Factuality of Reporting and Bias of News Media Sources.
+In Proceedings of the 2018 Conference on Empirical Methods in Natural Language
+Processing. 3528–3539.
+[2] Ramy Baly, Georgi Karadzhov, Jisun An, Haewoon Kwak, Yoan Dinkov, Ahmed
+Ali, James Glass, and Preslav Nakov. 2020. What Was Written vs. Who Read
+It: News Media Profiling Using Text Analysis and Social Media Context. In
+Proceedings of the 58th Annual Meeting of the Association for Computational
+Linguistics. 3364–3374.
+[3] Tobias Braun, Mark Rothermel, Marcus Rohrbach, and Anna Rohrbach. 2025.
+DEFAME: Dynamic Evidence-based FAct-checking with Multimodal Experts. In
+Forty-second International Conference on Machine Learning.
+[4] Yixuan Chen, Dongsheng Li, Peng Zhang, Jie Sui, Qin Lv, Lu Tun, and Li Shang.
+2022. Cross-modal Ambiguity Learning for Multimodal Fake News Detection. In
+Proceedings of the ACM Web Conference 2022. 2897–2905.
+[5] Yixuan Chen, Dongsheng Li, Peng Zhang, Jie Sui, Qin Lv, Lu Tun, and Li Shang.
+2022. Cross-modal Ambiguity Learning for Multimodal Fake News Detection. In
+Proceedings of the ACM Web Conference 2022. 2897–2905.
+[6] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. BERT:
+Pre-training of Deep Bidirectional Transformers for Language Understanding. In
+Proceedings of the 2019 Conference of the North American Chapter of the Association
+for Computational Linguistics: Human Language Technologies, Volume 1 (Long and
+Short Papers). 4171–4186.
+[7] Qingxiu Dong, Lei Li, Damai Dai, Ce Zheng, Jingyuan Ma, Rui Li, Heming Xia,
+Jingjing Xu, Zhiyong Wu, Baobao Chang, Xu Sun, Lei Li, and Zhifang Sui. 2024. A
+Survey on In-context Learning. In Proceedings of the 2024 Conference on Empirical
+Methods in Natural Language Processing.
+[8] Ziyu Ge, Yuhao Wu, Daniel Wai Kit Chin, Roy Ka-Wei Lee, and Rui Cao. 2025. Re-
+solving Conflicting Evidence in Automated Fact-Checking: A Study on Retrieval-
+Augmented LLMs. In Proceedings of the Thirty-Fourth International Joint Confer-
+ence on Artificial Intelligence, IJCAI-25. 9656–9664. AI and Social Good.
+[9] Beizhe Hu, Qiang Sheng, Juan Cao, Yuhui Shi, Yang Li, Danding Wang, and Peng
+Qi. 2024. Bad actor, good advisor: exploring the role of large language models
+in fake news detection. In Proceedings of the Thirty-Eighth AAAI Conference
+on Artificial Intelligence and Thirty-Sixth Conference on Innovative Applications
+of Artificial Intelligence and Fourteenth Symposium on Educational Advances in
+Artificial Intelligence (AAAI’24/IAAI’24/EAAI’24). Article 2466, 9 pages.
+[10] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+Wang, Lu Wang, and Weizhu Chen. 2022. LoRA: Low-Rank Adaptation of Large
+Language Models. In International Conference on Learning Representations.
+[11] Zhiwei Jin, Juan Cao, Yongdong Zhang, Jianshe Zhou, and Qi Tian. 2017. Novel
+Visual and Statistical Image Features for Microblogs News Verification. IEEE
+Transactions on Multimedia 19, 3 (2017), 598–608.
+[12] Diederik P. Kingma and Jimmy Ba. 2014. Adam: A Method for Stochastic Opti-
+mization. CoRR abs/1412.6980 (2014).
+[13] Guanghua Li, Wensheng Lu, Wei Zhang, Defu Lian, Kezhong Lu, Rui Mao, Kai Shu,
+and Hao Liao. 2024. Re-Search for The Truth: Multi-round Retrieval-augmented
+Large Language Models are Strong Fake News Detectors. arXiv:2403.09747 [cs.CL]
+[14] Hao Liao, Jiahao Peng, Zhanyi Huang, Wei Zhang, Guanghua Li, Kai Shu, and Xing
+Xie. 2023. MUSER: A MUlti-Step Evidence Retrieval Enhancement Framework
+for Fake News Detection. In Proceedings of the 29th ACM SIGKDD Conference on
+Knowledge Discovery and Data Mining. 4461–4472.
+[15] Jiawei Liu, Jingyi Xie, Yang Wang, and Zheng-Jun Zha. 2024. Adaptive Texture
+and Spectrum Clue Mining for Generalizable Face Forgery Detection. Trans. Info.
+For. Sec. 19 (Jan. 2024), 1922–1934.
+[16] Yifan Liu, Yaokun Liu, Zelin Li, Ruichen Yao, Yang Zhang, and Dong Wang. 2025.
+Modality Interactive Mixture-of-Experts for Fake News Detection. In Proceedings
+of the ACM on Web Conference 2025. 5139–5150.
+[17] Zhiwei Liu, Xin Zhang, Kailai Yang, Qianqian Xie, Jimin Huang, and Sophia
+Ananiadou. 2025. FMDLlama: Financial Misinformation Detection Based on
+Large Language Models. In Companion Proceedings of the ACM on Web Conference
+2025 (Sydney NSW, Australia) (WWW ’25). 1153–1157.
+[18] Ilya Loshchilov and Frank Hutter. 2019. Decoupled Weight Decay Regularization.
+In International Conference on Learning Representations.
+[19] Qiong Nan, Juan Cao, Yongchun Zhu, Yanyan Wang, and Jintao Li. 2021. MD-
+FEND: Multi-domain Fake News Detection. In Proceedings of the 30th ACM Inter-
+national Conference on Information & Knowledge Management. 3343–3347.
+[20] Cheng Niu, Yang Guan, Yuanhao Wu, Juno Zhu, Juntong Song, Randy Zhong, Kai-
+hua Zhu, Siliang Xu, Shizhe Diao, and Tong Zhang. 2024. VeraCT Scan: Retrieval-
+Augmented Fake News Detection with Justifiable Reasoning. In Proceedings of
+the 62nd Annual Meeting of the Association for Computational Linguistics (Volume
+3: System Demonstrations). 266–277.
+[21] Liangming Pan, Xiaobao Wu, Xinyuan Lu, Anh Tuan Luu, William Yang Wang,
+Min-Yen Kan, and Preslav Nakov. 2023. Fact-Checking Complex Claims with
+Program-Guided Reasoning. In Proceedings of the 61st Annual Meeting of the
+Association for Computational Linguistics (Volume 1: Long Papers). 6981–7004.
+[22] Peng Qi, Zehong Yan, Wynne Hsu, and Mong Li Lee. 2024. SNIFFER: Multimodal
+Large Language Model for Explainable Out-of-Context Misinformation Detec-
+tion. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR). 13052–13062.
+[23] Kai Shu, Deepak Mahudeswaran, Suhang Wang, Dongwon Lee, and Huan Liu.
+2019. FakeNewsNet: A Data Repository with News Content, Social Context
+and Spatialtemporal Information for Studying Fake News on Social Media.
+arXiv:1809.01286 [cs.SI]
+[24] Kai Shu, Guoqing Zheng, Yichuan Li, Subhabrata Mukherjee, Ahmed Hassan
+Awadallah, Scott Ruston, and Huan Liu. 2020. Early Detection of Fake News
+with Multi-source Weak Social Supervision. In Machine Learning and Knowledge
+Discovery in Databases: European Conference, ECML PKDD 2020, Ghent, Belgium,
+September 14–18, 2020, Proceedings, Part III (Ghent, Belgium). 650–666.
+[25] Mengzhu Sun, Xi Zhang, Jianqiang Ma, Sihong Xie, Yazheng Liu, and Philip S.
+Yu. 2023. Inconsistent Matters: A Knowledge-Guided Dual-Consistency Network
+for Multi-Modal Rumor Detection. IEEE Transactions on Knowledge and Data
+Engineering 35, 12 (2023), 12736–12749.
+[26] Yu Tong, Weihai Lu, Zhe Zhao, Song Lai, and Tong Shi. 2024. MMDFND: Multi-
+modal Multi-Domain Fake News Detection. In Proceedings of the 32nd ACM
+International Conference on Multimedia. 1178–1186.
+[27] Yaqing Wang, Fenglong Ma, Zhiwei Jin, Ye Yuan, Guangxu Xun, Kishlay Jha, Lu
+Su, and Jing Gao. 2018. EANN: Event Adversarial Neural Networks for Multi-
+Modal Fake News Detection. In Proceedings of the 24th ACM SIGKDD International
+Conference on Knowledge Discovery & Data Mining. 849–857.
+[28] Lianwei Wu, Pusheng Liu, and Yanning Zhang. 2023.
+See how you read?
+multi-reading habits fusion reasoning for multi-modal fake news detection.
+In Proceedings of the Thirty-Seventh AAAI Conference on Artificial Intelligence
+and Thirty-Fifth Conference on Innovative Applications of Artificial Intelligence
+and Thirteenth Symposium on Educational Advances in Artificial Intelligence
+
+
+
+===== PAGE 10 =====
+xx, xx, xx
+Guangyu Wei et al.
+(AAAI’23/IAAI’23/EAAI’23). Article 1540, 9 pages.
+[29] Lianwei Wu, Linyong Wang, and Yongqiang Zhao. 2024. Unified Evidence En-
+hancement Inference Framework for Fake News Detection. In Proceedings of
+the Thirty-Third International Joint Conference on Artificial Intelligence, IJCAI-24.
+6541–6549. Main Track.
+[30] Weizhi Xu, Junfei Wu, Qiang Liu, Shu Wu, and Liang Wang. 2022. Evidence-
+aware Fake News Detection with Graph Neural Networks. In Proceedings of the
+ACM Web Conference 2022. 2501–2510.
+[31] Yuzhou Yang, Yangming Zhou, Qichao Ying, Zhenxing Qian, and Xinpeng
+Zhang. 2024. Search, Examine and Early-Termination: Fake News Detection
+with Annotation-Free Evidences. In ECAI. 1463–1470.
+[32] Qichao Ying, Xiaoxiao Hu, Yangming Zhou, Zhenxing Qian, Dan Zeng, and Shim-
+ing Ge. 2023. Bootstrapping multi-view representations for fake news detection.
+In Proceedings of the Thirty-Seventh AAAI Conference on Artificial Intelligence and
+Thirty-Fifth Conference on Innovative Applications of Artificial Intelligence and
+Thirteenth Symposium on Educational Advances in Artificial Intelligence. Article
+601, 9 pages.
+[33] Qichao Ying, Xiaoxiao Hu, Yangming Zhou, Zhenxing Qian, Dan Zeng, and Shim-
+ing Ge. 2023. Bootstrapping multi-view representations for fake news detection.
+In Proceedings of the Thirty-Seventh AAAI Conference on Artificial Intelligence and
+Thirty-Fifth Conference on Innovative Applications of Artificial Intelligence and
+Thirteenth Symposium on Educational Advances in Artificial Intelligence. Article
+601, 9 pages.
+[34] Xueyao Zhang, Juan Cao, Xirong Li, Qiang Sheng, Lei Zhong, and Kai Shu.
+2021. Mining Dual Emotion for Fake News Detection. In Proceedings of the Web
+Conference 2021 (Ljubljana, Slovenia) (WWW ’21). 3465–3476.
+[35] Xuan Zhang and Wei Gao. 2023. Towards LLM-based Fact Verification on News
+Claims with a Hierarchical Step-by-Step Prompting Method. In Proceedings of
+the 13th International Joint Conference on Natural Language Processing and the
+3rd Conference of the Asia-Pacific Chapter of the Association for Computational
+Linguistics (Volume 1: Long Papers). 996–1011.
+[36] Xinyi Zhou, Jindi Wu, and Reza Zafarani. 2020. Similarity-Aware Multi-modal
+Fake News Detection. In Advances in Knowledge Discovery and Data Mining: 24th
+Pacific-Asia Conference, PAKDD 2020, Singapore, May 11–14, 2020, Proceedings,
+Part II. 354–367.
+[37] Yangming Zhou, Yuzhou Yang, Qichao Ying, Zhenxing Qian, and Xinpeng Zhang.
+2023. Multimodal Fake News Detection via CLIP-Guided Learning . In 2023 IEEE
+International Conference on Multimedia and Expo (ICME). 2825–2830.
+[38] Yongchun Zhu, Qiang Sheng, Juan Cao, Shuokai Li, Danding Wang, and Fuzhen
+Zhuang. 2022. Generalizing to the Future: Mitigating Entity Bias in Fake News
+Detection. In Proceedings of the 45nd International ACM SIGIR Conference on
+Research and Development in Information Retrieval.
+A
+Prompts for Knowledge Acquisition and
+Evaluation
+Fig. 4 and Boxes A.1–A.2 present the structured prompts designed
+for the evidence, reasoning, and sentiment agents to acquire perspective-
+specific knowledge. Boxes A.3–A.4 illustrate the prompts used by
+the evidence and reasoning evaluators to assess the reliability of
+the acquired knowledge.
+A.1. Reasoning Knowledge Generation
+As a logical reasoning expert, please analyze the truthfulness of the
+following news content:
+News: [news]
+Analysis Criteria (Logic and Common Sense):
+- Analyze from a common sense perspective, such as the political
+systems of various countries, living habits of animals, and other
+common knowledge
+- Whether the cause-effect relationships follow logical patterns
+- Whether this is physically possible according to scientific laws
+- Whether any numbers or statistics are realistically feasible
+Output Format:
+Analysis: [2-3 sentence logical assessment]
+Prediction: true/fake
+Important: Keep the entire output under 190 tokens.
+A.2. Sentiment Analysis
+As a content analysis expert, please assess the truthfulness of
+the following news content by examining its emotional tone and
+sensationalism:
+News: [news]
+Analysis Criteria (Emotional and Sensational Language):
+- Identify whether the language contains inflammatory or provocative
+elements
+- Evaluate if the tone is excessively subjective or biased
+- Detect the presence of exaggerated or alarmist statements
+- Assess if emotional manipulation is being used to influence readers
+Output Format:
+Analysis: [2-3 sentence assessment focusing on emotional tone and
+sensationalism]
+Prediction: true/fake
+Important: Keep the entire output under 190 tokens.
+A.3. Prompt Design for Evidence Evaluator
+News: [news]
+Related news evidence from search results: [evidence]
+Please evaluate the reliability of external evidence for the news story
+by applying the following three criteria:
+1. Internal Consistency: Are the different pieces of evidence consistent
+with each other?
+2. Information Sufficiency: Does the evidence provide sufficient details
+to support the news story?
+3. Source Credibility: Are the sources of the evidence authoritative
+and trustworthy?
+Judgment:
+Sufficient: All dimensions are strong or there are only minor issues.
+Insufficient: There are significant problems with the evidence.
+Output:
+Evidence [Sufficient/Insufficient], because [Short, specific reasons.].
+A.4. Prompt Design for Reasoning Evaluator
+Evaluate the reliability of reasoning knowledge for news.
+News: [news]
+Related reasoning knowledge from LLMs: [reasoning knowledge]
+Please evaluate the reliability of reasoning knowledge for the news by
+applying the following criteria:
+1. Confidence: Do you have enough confidence in the logical
+reasoning knowledge to judge the truthfulness of the news? If not,
+consider the reasoning knowledge unreliable.
+2. Plausibility: Does the reasoning follow logically from established
+facts and align with common sense? Are there any logical fallacies or
+implausible assumptions?
+Judgment:
+Reliable: All dimensions are strong, or there are only minor issues.
+Unreliable: There are significant problems with the reasoning
+knowledge.
+Output:
+Evidence [Reliable/Unreliable], because [Short, specific reasons].
+
+
+
+===== PAGE 11 =====
+Towards Real-Time Fake News Detection under Evidence Scarcity
+xx, xx, xx
+B
+Inference Time Analysis
+We measure the inference time on 400 randomly sampled instances
+from the RealTimeNews-25 dataset. As shown in Table 7, we com-
+pare EASE with three state-of-the-art (SOTA) models that achieve
+the most competitive detection performance: Hiss [35], Veract
+Scan [20], and DEFAME [3]. The results reveal a clear trade-off
+between accuracy and inference time. Hiss and Veract Scan offer
+faster inference but at the cost of lower accuracy. In contrast, EASE
+not only substantially surpasses the strongest baseline, DEFAME,
+in detection accuracy but also achieves faster inference speed.
+We further provide a detailed runtime breakdown of EASE in
+Table 8. The primary time cost arises from evidence retrieval,
+reasoning generation, and sentiment analysis, among which
+evidence retrieval is the most time-consuming. This is mainly due
+to the multi-round query mechanism designed to enhance the ac-
+curacy and relevance of retrieved evidence. Since GPT models are
+accessed exclusively via OpenAI’s API, most computational work-
+loads are executed externally. Specifically, evidence acquisition, rea-
+soning generation, and sentiment analysis are performed through
+API calls to large language models. The internal components are
+executed on a dual-socket server equipped with two Intel Xeon
+Gold 6526Y CPUs, totaling 32 physical cores and 64 logical threads.
+In contrast, the evaluator and expert modules introduce small
+overhead to the total inference time.
+Table 7: Comparison of inference time among competitive
+models.
+Method
+Inferene Time (min:sec)
+DEFAME [3]
+3:03
+Hiss [35]
+0:41
+Veract Scan [20]
+0:48
+EASE
+1:23 ∼1:50
+Table 8: Inference time breakdown of EASE.
+Component
+Time (min:sec)
+Evidence Retrieval
+1:23
+Evidence Evaluator
+0:05
+Evidence Expert
+<0:01
+Reasoning Generation
+0:08
+Reasoning Evaluator
+0:05
+Reasoning Expert
+<0:01
+Sentiment Analysis
+0:07
+Sentiment Expert
+<0:01
+Total (minimal~maximum)
+1:23~1:50
+C
+Illustrative Examples from RealTimeNews-25
+Box G presents a representative data sample from RealTimeNews-
+25, which includes rich contents, such as the news content, ground-
+truth label, external evidence, reasoning knowledge, and sentiment
+analysis. It also features initial assessments generated by LLMs from
+multiple perspectives, along with metadata that indicates whether
+the news was modified, its source, and reliability annotations for
+both the evidence and reasoning components.
+Table 9 presents examples of fake news generation on RealTimeNews-
+25, created by modifying original news articles collected from au-
+thoritative sources.
+G. Data in RealTimeNews-25
+{
+ID: 1
+Content: Death of Slim Shady: The controversial legacy of
+Eminem’s peroxide-blond alter ego
+Published: 2024-06-01
+Label: real
+Evidence: In his new album "The Death of Slim Shady (Coup
+De Grâce)", Eminem examines the controversial legacy...
+Evidence Prediction: real
+Reasoning: The title uses the provocative term "Death" and
+frames the topic around a "controversial legacy"...
+Reasoning Prediction: real
+Sentiment: The title uses metaphorical language
+common in music journalism...
+Sentiment Prediction: real
+Modification Type: origin
+Sources: BBC
+Evidence Reliable: 1
+Reasoning Reliable: 1
+},...
+Evidence Agent
+Your task is to crawl web content using reverse search.
+You’ve conducted a search, and your task is to summarize the results.
+             Reverse 
+             Search 
+             Reverse 
+             Search 
+                 
+Summarize             
+                 
+Summarize             
+             Web
+             Search 
+             Web
+             Search 
+             Query 
+             Extraction 
+             Query 
+             Extraction 
+             Image
+             Search 
+       LLM
+       LLM
+       LLM
+               Re 
+               Research 
+               Re 
+               Research 
+               Re 
+               Research 
+Invoke
+Determine if the evidence is sufficient to assess the truth of the news; if not, keep searching.
+      
+You’ve conducted a search, and your task is to summarize the results.
+Jennifer Aniston and Justin Theroux announced their split in 2018, but they 
+have made efforts to maintain their friendship and stay in touch since then.
+               Firecrawl
+               Firecrawl
+               Firecrawl
+               Firecrawl
+Determine if the evidence is sufficient to assess the truth of the news; if not, keep searching.
+Firecrawl is an API 
+service that retrieves 
+URLs, crawls them, 
+and converts the 
+content into clean 
+Markdown or 
+structured data. We 
+crawl all accessible 
+subpages and deliver 
+clean data for each 
+one, without requiring 
+a sitemap.
+The relationship between Jennifer Aniston and Brad Pitt shows 
+no signs of rekindling old feelings. Despite the two rebuilding 
+their friendship.
+  Query: ‘Jennifer Aniston Justin Theroux split news October 2023’
+”There are no signs of rekindled feelings between Jennifer Aniston and Brad Pitt. Despite their 
+renewed friendship, There is no evidence of a romantic relationship. Meanwhile, Aniston is 
+focused on rebuilding her life and may meet with Justin Theroux, but there is no indication of a 
+reunion with Brad Pitt.“   (Prediction: FAKE)
+     Jennifer Aniston Jets Away After Failing To Rekindle With Brad Pitt It is understood
+     that she met up with Theroux who has been living in the city since the pair split-up
+    The actress is trying to re-build her life after announcing her split with The
+    roux just two months ago after it became apparent the air were no longer living 
+    together. We pay for juicy info!  (Label:  FAKE)
+Figure 4: Prompting process of the evidence agent.
+
+
+
+===== PAGE 12 =====
+xx, xx, xx
+Guangyu Wei et al.
+Table 9: Examples of data collection in the RealTimeNews-25 dataset. “Modified News” denotes fake news generated by altering
+the original news content indicated in red.
+News-1: On March 25, local time, German Federal President Steinmeier will present the certificate of
+dismissal to the current Chancellor Scholz and his cabinet members. Scholz and his cabinet will continue
+to perform their duties until a new federal government is established.
+Modified News: On April 15, local time, French President Macron will present the certificate of dismissal
+to the current Prime Minister Dupont and his cabinet members. Dupont and his cabinet will continue to
+perform their duties until a new national government is formed.
+News-2: As the Israel Defense Forces (IDF) conducted large-scale operations in the West Bank, destroying
+over 20 buildings in the Jenin refugee camp on February 2, Palestinian President Mahmoud Abbas called
+for an emergency meeting of the United Nations Security Council. He urged the United States to intervene
+in what he described as an Israeli “act of aggression.”
+Modified News: The Egyptian Armed Forces continue large-scale operations in the Sinai Peninsula, and
+on March 10, they destroyed over 30 buildings in the Rafah refugee camp. The President of Egypt, Sisi, calls
+for an emergency meeting of the UN Security Council, urging the United States to intervene in Egypt’s
+’aggressive actions.’
+News-3: The Chinese national table tennis team’s list of participants for the 2025 Doha World Table Tennis
+Championships has been announced, led by Wang Chuqin, Sun Yingsha, Lin Shidong and others.
+Modified News: Retain the original news.
+Table 10: Failure cases of EASE.
+News-1: Climate change does not exacerbate the dangers posed by hurricanes. The World Meteorological
+Organization emphasizes that all naturally occurring climate events now take place against the backdrop
+of human-induced climate change. Driven by global warming, climate change intensifies extreme weather
+events and disrupts seasonal rainfall and temperature patterns. [Label: FAKE]
+External Evidence: The claim that climate change exacerbates hurricane dangers is supported by multiple
+sources. The World Meteorological Organization reports an increase in tropical cyclone clusters in the
+North Atlantic due to global warming. However, some scientists caution against blaming Hurricane Sandy
+solely on climate change, noting that it is not yet possible to definitively link any single storm to global
+warming, and the connection is not as clear as some argue.
+Evidence Evaluator: The evidence contains contradictory information.
+Reasoning Knowledge: Climate change has not yet been definitively linked to an increase in the global
+frequency of hurricanes, but it has significantly intensified their strength, rainfall, and associated risks.
+Therefore, disaster prevention and mitigation strategies must place greater emphasis on the extreme
+impacts that hurricanes can bring.
+Reasoning Evaluator: The reasoning knowledge contains inconsistent statements, thus it is unreliable.
+Sentiment Analysis: The language is factual and neutral, citing an authoritative organization without
+inflammatory or provocative elements. The tone is objective, stating scientific observations without
+exaggerated or alarmist statements or any apparent emotional manipulation.
+Sentiment Expert: REAL ✗
+D
+Failure Case
+Table 10 presents a failure case of EASE. In this example, the news
+claim that “Climate change does not exacerbate the dangers posed
+by hurricane” leads the agent to retrieve relevant but contradictory
+evidence. The reasoning knowledge states that although climate
+change is not conclusively linked to increased hurricane frequency,
+it intensifies storm strength, precipitation, and related risks. How-
+ever, this reasoning is evaluated as unreliable due to internal in-
+consistencies. Moreover, the sentiment analyzer fails to capture
+emotional shifts or inflammatory cues within the neutrally toned
+official report. As a result, EASE fails to correctly assess this case.
+Nevertheless, the presence of refuting evidence in external sources
+suggests the potential for developing more fine-grained evalua-
+tion mechanisms to better reconcile conflicting information and
+improve model robustness.

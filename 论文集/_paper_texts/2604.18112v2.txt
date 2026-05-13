@@ -1,0 +1,2272 @@
+
+
+===== PAGE 1 =====
+Retrieval-Augmented Multimodal Model for Fake News Detection
+Yiheng Li∗
+202501410213@uibe.edu.cn
+University of International Business and Economics
+Beijing, China
+Weihai Lu∗†
+luweihai@pku.edu.cn
+Peking University
+Beijing, China
+Hanyi Yu
+University of Southern California
+Los Angeles, CA, USA
+hanyiyu@usc.edu
+Yue Wang
+Upstart Holdings, Inc.
+San Mateo, CA, USA
+wyue0125@alumni.stanford.edu
+Abstract
+In recent years, multi-modal multi-domain fake news detection has
+garnered increasing attention. Nevertheless, this direction presents
+two significant challenges: (1) Failure to Capture Cross-Instance
+Narrative Consistency: existing models usually evaluate each
+news in isolation, fail to capture cross-instance narrative consis-
+tency, and thus struggle to address the spread of cluster-based
+fake news driven by social media; (2) Lack of Domain-Specific
+Knowledge for Reasoning: conventional models, which rely
+solely on knowledge encoded in their parameters during train-
+ing, struggle to generalize to new or data-scarce domains (e.g.,
+emerging events or niche topics). To tackle these challenges, we
+introduce Retrieval-Augmented Multimodal Model for Fake News
+Detection (RAMM). First, RAMM employs a Multimodal Large
+Language Model (MLLM) as its backbone to capture cross-modal
+semantic information from news samples. Second, RAMM incor-
+porates an Abstract Narrative Alignment Module. This component
+adaptively extracts abstract narrative consistency from diverse in-
+stances across distinct domains, aggregates relevant knowledge, and
+thereby enables the modeling of high-level narrative information.
+Finally, RAMM introduces a Semantic Representation Alignment
+Module, which aligns the model’s decision-making paradigm with
+that of humans—specifically, it shifts the model’s reasoning process
+from direct inference on multimodal features to an instance-based
+analogical reasoning process. Extensive experimental results on
+three public datasets validate the efficacy of our proposed approach.
+Our code is available at the following link: https://github.com/li-
+yiheng/RAMM
+CCS Concepts
+• Multi-domain →Multimodal Learning.
+∗Both authors contributed equally to this research.
+†Corresponding author.
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission
+and/or a fee. Request permissions from permissions@acm.org.
+Conference acronym ’XX, Woodstock, NY
+© 2018 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 978-1-4503-XXXX-X/2018/06
+https://doi.org/XXXXXXX.XXXXXXX
+Keywords
+Fake News Detection, Multi-domain, Multimodal Learning
+1
+Introduction
+The popularity of social media platforms has fundamentally re-
+shaped the landscape of information dissemination, fostering an
+environment where fake news can spread at an unprecedented
+speed and scale [8, 12, 23]. A particularly insidious form of fake
+news exploits the synergy between textual and visual content—by
+strategically employing engaging images to amplify false narra-
+tives [14, 34, 42], it renders fabricated stories more credible and
+emotionally resonant. This phenomenon has driven the emergence
+of the critical research field of multimodal fake news detection,
+which seeks to develop computational methods for distinguish-
+ing fact from fiction through the joint analysis of text and images
+[3, 24, 57, 61, 63].
+However, there exists a crucial yet frequently overlooked chal-
+lenge in current research: the domain specificity of news. For in-
+stance, the characteristics and distribution of fake news in the
+political domain exhibit significant differences from those in do-
+mains such as health, science, or entertainment. A model trained
+to detect political disinformation may exhibit poor performance
+when confronted with fabricated health advice, primarily due to
+such domain disparities. To address this critical gap, multimodal
+cross-domain fake news detection has emerged as a vital and highly
+promising research frontier, which aims to enhance the robustness
+and generalization ability of detection models across different news
+domains. Existing models have demonstrated outstanding perfor-
+mance. [38] proposed a new framework that is capable of preserving
+both domain-specific and cross-domain knowledge within news
+records. KG-MFEND [2] develops sentence trees to capture the
+specific semantics of news across different domains. Transm3 [18]
+is enhanced by the Adaptive Pooling Kernel Convolutional Neu-
+ral Network. MMDFND [43] extracts domain-specific semantics
+through a progressive hierarchical extraction network. Despite the
+aforementioned advancements, existing methods still face signifi-
+cant obstacles when deployed in real-world cross-domain scenarios,
+revealing critical limitations that hinder their effectiveness. We cat-
+egorize these limitations into two major challenges:
+• Failure to Capture Cross-Instance Narrative Consis-
+tency: As shown in Figure 1, fake news typically spreads in
+arXiv:2604.18112v2  [cs.CL]  29 Apr 2026
+
+
+
+===== PAGE 2 =====
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+Sample 1
+"Exclusive revelation! Workers at the election station 
+in XX state were caught on camera destroying the 
+ballots. The evidence is overwhelming!"
+Sample 2
+"Data never lies! This 90-degree voting curve is 
+statistically impossible unless there is some algorithm 
+at work to cheat!"
+Abstract narrative 
+    consistency
+Same Topic:"Election 
+Fraud in XX State"
+    RAMM
+Other Model
+Based on image-text 
+features, compute 
+the similarity.
+low similarity
+Figure 1: The issue of cluster-based propagation of fake news:
+different news items exhibit significant differences in their
+image-text content, yet all aim to persuade readers to believe
+the same claim-"Election Fraud".
+the form of "clusters"—multiple distinct news items (contain-
+ing different images and texts) propagate the same underly-
+ing false narrative. Existing models process each news item
+independently and fail to perceive this higher-level consis-
+tency [25], thus struggling to identify a specific news item
+as part of a coordinated disinformation campaign (which
+serves as key evidence for ascertaining its falsity) [40, 54].
+• Lack of Domain-Specific Knowledge for Reasoning:
+Detecting complex fake news requires not only evaluating
+text-image consistency but also reasoning based on domain-
+specific world knowledge [37, 55]. For instance, verifying a
+claim about a new scientific discovery necessitates knowl-
+edge of established scientific principles [5, 28, 56]. Current
+models lack explicit mechanisms for acquiring and integrat-
+ing such external domain-specific knowledge; instead, they
+often rely on spurious correlations within training data for
+learning, which results in poor generalization performance
+in unseen domains [9].
+To address these fundamental challenges, we propose a Retrieval-
+Augmented Multimodal Model for Fake News Detection (abbre-
+viated as RAMM). This approach draws inspiration from the ob-
+servation that human factcheckers do not evaluate news in iso-
+lation—instead, they instinctively retrieve and compare existing
+relevant information to identify overarching narratives and incon-
+sistencies. By integrating a retrieval-augmentation mechanism into
+the detection pipeline based on Large Language Models (LLMs),
+RAMM translates this intuition into an actionable technical frame-
+work. Its core idea is to enrich the representation of the target news
+article by retrieving "homogeneous narrative sets" of semantically
+similar news items. Specifically, this framework comprises three key
+components. RAMM employs a Multimodal Large Language Model
+(MLLM) as its backbone to capture cross-modal semantic informa-
+tion from news samples. Abstract Narrative Alignment Module
+(ANA) leverages LLMs to extract the core narrative from a given
+news item, acquires relevant news from in-domain and out-domain
+sources, synthesizes the information, and generates final, robust
+veracity predictions. Semantic Representation Alignment Module
+(SRA), which aligns the model’s decision-making paradigm with
+that of humans, it shifts the model’s reasoning process from direct
+inference on multimodal features to an instance-based analogical
+reasoning process.
+Our contributions are as follows:
+• This study proposes RAMM, a novel retrieval-augmented
+framework for multimodal cross-domain fake news detec-
+tion. As far as we are aware, this is the first research to
+explicitly equip MLLMs with a retrieval mechanism to ad-
+dress the issues of narrative clusters and domain-specific
+knowledge gaps in fake news detection.
+• It introduces a Abstract Narrative Alignment Module (ANA):
+leveraging the reasoning capabilities of LLMs, this module
+extracts high-level, abstract narrative information, freeing it-
+self from reliance on surface-level features. And then identify
+and integrate information from news clusters with consis-
+tent underlying narratives, effectively bridging the semantic
+gap between raw content and veracity judgment.
+• It presents a Semantic Representation Alignment Module
+(SRA), redirecting the model’s reasoning process away from
+direct inference on multimodal features toward an instance-
+based analogical reasoning process like human.
+• Extensive experiments are conducted on multiple publicly
+available datasets. The results demonstrate that the proposed
+RAMM framework outperforms state-of-the-art methods sig-
+nificantly, with outstanding performance particularly in chal-
+lenging cross-domain scenarios—fully verifying its superior
+effectiveness and generalization ability.
+2
+RELATED WORKS
+2.1
+LLMs for Fake News Detection
+The rapid advancement of Large Language Models (LLMs)[22, 47,
+48] and Multi-Agent System [16] has introduced a paradigm shift in
+the field of fake news detection. Recent approaches have explored
+more sophisticated ways to utilize the capabilities of LLMs[59].
+For example, FactAgent is an agentic approach that mimics the
+workflow of human fact-checkers by using an LLM to integrate
+its internal knowledge with information gathered from external
+tools to verify news claims [19]. This method allows for a more
+dynamic and comprehensive verification process that does not rely
+solely on the content of the article itself. Similarly, multi-agent LLM
+frameworks have been proposed to enhance detection by assigning
+specialized agents to different aspects of the verification task, such
+as analyzing source credibility, content style, and factual claims
+[10]. To enhance the interpretability and reasoning process of de-
+tection. Some frameworks use LLMs to produce justifications for
+their classification by reasoning through the evidence found [31]. A
+defense-based explainable framework was proposed where an LLM
+is prompted to generate justifications for both "real" and "fake" ver-
+dicts, and a final inference is made by modeling the defense between
+these competing arguments [45]. Furthermore, some studies have
+shown that LLM-generated explanations can help human users in
+identifying fake news. By modeling the relationships between news,
+entities, and topics, their model can mine deeper semantic patterns
+indicative of fake news [27]. Another network for feature extrac-
+tion with the advanced reasoning capabilities of LLMs to provide
+auxiliary explanations, thereby improving detection accuracy [32].
+
+
+
+===== PAGE 3 =====
+Retrieval-Augmented Multimodal Model for Fake News Detection
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+2.2
+Multimodal Fake News Detection
+Owing to the remarkable achievements of deep learning and multi-
+modal in diverse application domains [4, 20, 21, 26, 59], an increas-
+ing number of studies have integrated deep learning models into
+multimodal fake news task[56].
+Multimodal fake news detection is a method that utilizes various
+types of data, such as text, images, videos, audio, etc., to identify and
+detect fake news [15]. MVAE [13] proposes a novel multimodal vari-
+ational autoencoder model capable of simultaneously processing
+multiple data sources. MCNN [51] has designed a comprehensive
+framework that integrates feature extraction. It employs a con-
+sistency scoring mechanism to measure the degree of matching
+between features. [1] designs a novel framework that enhances
+detection accuracy through learning from cross-modal ambiguity.
+MMDFND [43] extracts domain-specific semantics and utilizes a
+pivot transformer network to integrate information from differ-
+ent modalities. [11] enhanced few-shot by transforming n-shot
+classification into (n×z)-shot problem. [7] employs a reweighting
+strategy based on modal confidence and propagation structure. [52]
+designed hierarchical fusion network, defined three fusion levels to
+optimize multimodal fusion. The aforementioned methods overlook
+the complementarity and differences between different modalities
+during information integration. The simple fusion of modal features
+can lead to negative transfer on the model’s performance.
+3
+PROBLEM STATEMENT
+We denote the sets of news by U. Each sample 𝑢∈U of mul-
+timodal news is represented as N𝑢= [𝐼𝑢,𝑇𝑢], where 𝐼and 𝑇re-
+spectively represent the image and text. The news in the dataset
+is categorized into 𝑘classes, each assigned a domain label 𝑑𝑢∈
+{𝐷𝑜𝑚𝑎𝑖𝑛1, . . . , 𝐷𝑜𝑚𝑎𝑖𝑛𝑘}. Given a news piece 𝑢that incorporates
+both text and image information, and a domain label 𝑑𝑢, the objec-
+tive of multi-modal multi-domain fake news detection is to deter-
+mine the authenticity of the news piece.
+4
+METHODOLOGY
+In this section, we present a detailed description of the RAMM
+framework, as illustrated in Figure 2. The RAMM framework is built
+upon a MLLM backbone and incorporates two primary modules: a
+Semantic Representation Alignment Module through multimodal
+similarity, and an Abstract Narrative Alignment Module refined via
+large language models.
+4.1
+MLLM Backbone
+In order to effectively identify disinformation in multimodal news,
+we have adopted the MLLM as the backbone, which consists of an
+image encoder, an LLM, and a Query Transformer (Q-Former).
+4.1.1
+Visual Feature Extraction. We employ a pre-trained Vision
+Transformer (ViT), adopted from the BLIP model, as our visual
+backbone. An input image 𝐼𝑢∈R𝐻×𝑊×𝐶is initially partitioned into
+a sequence of fixed-size patches. These patches are then linearly
+projected into embeddings and combined with positional informa-
+tion. The resulting sequence is fed into the ViT encoder to produce
+a set of patch features.
+To efficiently bridge the visual encoder with the language model,
+we introduce a Q-Former module. The Q-Former utilizes a small
+set of learnable queries to distill the most salient visual information
+from the ViT’s output features via cross-attention.
+Finally, a Multilayer Perceptron (MLP) projection layer maps
+the output from the Q-Former to the same dimension 𝑑as the
+language model’s text features. This yields the final image feature
+representation𝑉𝑢= {𝑣1, 𝑣2, . . . , 𝑣𝑚}, where each 𝑣𝑖∈R𝑑. The entire
+process can be summarized as:
+𝑉𝑢= MLP(Q-Former(ViT(𝐼𝑢)))
+(1)
+4.1.2
+Textual Feature Extraction. For the input text 𝑇𝑢, we use the
+tokenizer associated with LLM to convert it into a sequence of
+tokens {𝑡1,𝑡2, . . . ,𝑡𝑛}. Then, we utilize the LLM’s own word embed-
+ding layer to map this token sequence into a set of high-dimensional
+text feature vectors 𝐴𝑢= {𝑎1,𝑎2, . . . ,𝑎𝑛}, where 𝑎𝑖∈R𝑑.
+4.1.3
+Multimodal Feature Extraction. We prepend the aligned vi-
+sual feature 𝑉𝑢as a "visual prompt" to the text feature sequence 𝐴𝑢,
+forming a unified multimodal input sequence:
+𝐸𝑢= concat(𝑉𝑢,𝐴𝑢) = {𝑣1, . . . , 𝑣𝑚,𝑎1, . . . ,𝑎𝑛}
+(2)
+This fused sequence 𝐸𝑢is directly fed into the LLM’s Transformer
+architecture. To obtain a global representation for the entire image-
+text pair, we adopt the final hidden state of the last token as the
+aggregated feature vector ℎ𝑢.
+ℎ𝑢= LLM(𝐸𝑢)[−1]
+(3)
+where (·)[−1] denotes taking the last vector from the output se-
+quence.
+4.2
+Abstract Narrative Alignment Module
+A primary challenge in fake news detection is its dissemination
+in event-specific "clusters", as shown in Figure 1. Consequently,
+we propose the Abstract Narrative Alignment Module (ANA) to
+explicitly isolate and model the unifying deceptive narrative that
+connects seemingly disparate news items targeting the same event.
+4.2.1
+Abstract narrative with LLMs. Multimodal news data is fre-
+quently characterized by a composite of attributes, including core
+claims, implicit stances, and argumentative frames. These attributes
+encapsulate a wealth of abstract narrative semantics, which is criti-
+cal for deepening a model’s understanding of the news’s persuasive
+intent. Given sample 𝑢’s information N𝑢, we extract the abstract
+narrative for image and text. These multi-modal information are
+then organized into a prompt format (denoted as P𝑢). Next, we
+utilize a public LLM API to generate a textual summary A𝑢of the
+news’ abstract narrative. This process can be formulated as follows:
+A𝑢= LLM(P𝑢)
+(4)
+Our goal is to perform contrastive learning based on news similarity.
+However, directly measuring similarity using the textual summary
+is impractical. Therefore, we employ a pretrained text embedding
+model M to extract and convert the semantic information contained
+in the textual narrative into embeddings, formatted as follows:
+˜h𝑢= M(A𝑢)
+(5)
+
+
+
+===== PAGE 4 =====
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+Input image Iu
+   Image
+  Encoder
+Q-Former
+Queries
+Large Language Model
+Input text Tu
+NVIDIA and OpenAI 
+have announced a 
+landmark strategic 
+partnership  NVIDIA 
+intends to invest up 
+to $100 billion in 
+OpenAI, supporting 
+the deployment of...
+CLIP
+Train Set
+CLIP
+train sample semantic representation 
+sample 1  sample 2  
+sample n  
+input sample semantic representation 
+Calculate Similarity
+Rank
+Most similar sample
+text and image 
+OpenAI and Nvidia 
+collaboration will...
+Instruction Template
+ Input
+Smaple
+   u 
+OpenAI and Nvidia 
+collaboration will...
+NVIDIA and Open
+AI have announce..
+Performance impr-
+ovement of OpenA..
+LLM
+Narrative Content
+Bert
+Sample
+   1 
+Sample
+   n 
+Input sample
+ Narrative    
+Embedding 
+Domain i 
+Narrative    
+Embedding 
+Other doamin 
+Narrative    
+Embedding 
+Selecte Samples’
+   Embedding 
+Atterntion
+hu+ 
+Input text
+     Tu
+NVIDIA and Open
+AI have announce..
+Large Language Model
+Share weights
+ hu
+Lalign Lrecon
+Lcom
+Predict
+Lalpha
+<image>
+<image>
+Here is 
+a demo-
+nstration:
+<..> and 
+the first 
+image, 
+the label 
+is 1,....
+Semantic Representation Alignment module
+Abstract Narrative Alignment module
+MLLM backbone
+hupre 
+Figure 2: The architecture of RAMM. Semantic Representation Alignment Module selects examples based on image-text
+similarity, together with the target samples, are input into the MLLM backbone to extract features for discrimination. Abstract
+Narrative Alignment Module updates parameters in accordance with CIBL loss to capture high-level narrative correlations.
+where ˜h𝑢∈R ˜𝑑represents the narrative embedding corresponding
+to N𝑢and ˜𝑑is the embedding size of the text embedding model
+M. Specifically, M indicates SimCSE-RoBERTa [6] and BGE [49]
+in this paper.
+4.2.2
+Domain-Aware Homogeneous Retrieval. Once the narrative
+embeddings of news are obtained, similar news can be retrieved
+based on semantic similarity. Specifically, for a given news N𝑢, we
+calculate the cosine similarity between its narrative embedding
+˜h𝑢and the narrative embeddings of other news. News are then
+ranked in descending order according to the computed semantic
+similarity. To account for the domain-specificity of samples, we
+construct homogeneous sets of high-level narrative information.
+These sets are assembled by sourcing related news articles from both
+in-domain and out-of-domain sets. The top 𝑘news are retrieved to
+construct the set of homogeneous news for sample 𝑢, denoted as
+Q𝑢and ˜Q𝑢respectively. This process is formulated as:
+Q𝑢= {𝑢′ ∈U \ {𝑢} | rank(cosinesim( ˜h𝑢, ˜h𝑢′)) ≤𝑘𝑖𝑛,𝑑𝑢′ = 𝑑𝑢}
+(6)
+˜Q𝑢= {𝑢′ ∈U \ {𝑢} | rank(cosinesim( ˜h𝑢, ˜h𝑢′)) ≤𝑘𝑜𝑢𝑡,𝑑𝑢′ ≠𝑑𝑢}
+(7)
+where 𝑢′ ∈U \ {𝑢} denotes the set of all news except 𝑢, 𝑘𝑖𝑛and
+𝑘𝑜𝑢𝑡denote the number of in-domain and out-of-domain retrieved
+similar news, respectively.
+Subsequently, we combine the in-domain and out-of-domain sets,
+yielding the final homogeneous news collection Q𝑢= Q𝑢∪˜Q𝑢.
+4.2.3
+Narrative-Enhanced Fusion. After identifying homogeneous
+news for each news item based on narrative information, a straight-
+forward approach for contrastive learning is to use a homogeneous
+news item 𝑢′ ∈Q𝑢as the positive sample for news 𝑢. In this sce-
+nario, the outputs of the Large Language Model (LLM), h𝑢′ and h𝑢,
+will be directly brought closer together. However, semantic similar-
+ity is computed in the text embedding space, which may differ from
+the multimodal space of the original samples. This discrepancy may
+lead to representation misalignment.
+To address this issue, we propose using retrieved news as a
+candidate set and designing a learnable method to synthesize an
+appropriate positive sample for contrastive learning from this can-
+didate set. Specifically, we first map the semantic representations of
+news through a learnable adapter. Then, in the mapped space, we
+employ an attention mechanism, where the current news serves as
+a query to compute the probability 𝑝𝑢,𝑢′ that each candidate news
+𝑢′ ∈Q𝑢is suitable as the positive sample for the current news 𝑢.
+This process is formulated as:
+𝑤𝑢,𝑢′ = LeakyReLU(a⊤[W˜h𝑢∥W˜h𝑢′]),
+𝑝𝑢,𝑢′ = softmax𝑢′ (𝑤𝑢,𝑢′) =
+exp(𝑤𝑢,𝑢′)
+Í
+𝑢𝑘∈N𝑢exp(𝑤𝑢,𝑢𝑘) ,
+(8)
+where W ∈R𝑑× ˜𝑑is a learnable weight matrix that adapts the se-
+mantic embeddings to the representation space of the MLLM model,
+and ∥denotes the concatenation operation. a ∈R2𝑑represents a
+single-layer neural network used to generate the attention score,
+with the LeakyReLU activation function. The softmax function is
+
+
+
+===== PAGE 5 =====
+Retrieval-Augmented Multimodal Model for Fake News Detection
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+employed to transform the coefficients into probabilities. Based on
+this, we perform a weighted sum of h𝑢′ for all 𝑢′ ∈Q𝑢to obtain
+the composite positive contrastive sample h+
+𝑢for h𝑢:
+h+
+𝑢=
+∑︁
+𝑢′∈N𝑢
+𝑝𝑢,𝑢′h𝑢′,
+(9)
+where h𝑢′ ∈R𝑑is the MLLM’s output multinmodal representation
+for 𝑢′,as defined in Equation (3).
+4.2.4
+Common Information Bottleneck Loss (CIBL). Most existing
+feature optimization methods rely on single contrastive learning to
+align features. However, if one of the features is noisy or becomes
+blurred due to averaging, such forced alignment will impair the
+valuable personalized information in h𝑢. Accordingly, we propose
+a new optimization method based on Common Information theory
+and Information Bottleneck theory (abbreviated as CIBL).
+The feature h𝑢of news 𝑢and its synthetic positive sample h+
+𝑢
+are both noisy observations of a certain latent and more pristine
+"common abstract narrative" Z𝑢. Therefore, we opt to jointly distill
+this latent common abstract narrative Z𝑢from h𝑢and h+
+𝑢. Specifi-
+cally, we feed h𝑢and h+
+𝑢into a joint variational encoder 𝑞𝜙, which
+parameterizes a Gaussian posterior distribution 𝑞𝜙(z𝑢|h𝑢, h+
+𝑢). This
+encoder consists of two 𝑀𝐿𝑃networks 𝑓𝜇and 𝑓𝜎, which respec-
+tively predict the mean 𝝁𝑢and logarithmic variance log 𝝈2
+𝑢:
+𝝁𝑢, log 𝝈2
+𝑢= 𝑓𝜇([h𝑢||h+
+𝑢]), 𝑓𝜎([h𝑢||h+
+𝑢])
+(10)
+Then, we obtain the latent common narrative representation Z𝑢
+by sampling from this distribution via the reparameterization trick:
+Z𝑢= 𝝁𝑢+ 𝝈𝑢⊙𝝐,
+where 𝝐∼N (0, I)
+(11)
+where ⊙denotes element-wise multiplication.
+To ensure that the latent representation Z𝑢accurately captures
+the common abstract narrative information between h𝑢and h+
+𝑢,
+while maintaining its conciseness and robustness, we have designed
+three complementary self-supervised loss functions.
+Firstly, within the framework of common information theory, Z𝑢
+must contain sufficient information to account for h+
+𝑢. Therefore,
+we compute the alignment loss Lalign by treating (Z𝑢, h+
+𝑢) as a
+positive sample pair.
+Lalign = −log
+exp(sim(Z𝑢, h+
+𝑢)/𝜏)
+exp(sim(Z𝑢, h+𝑢)/𝜏) + Í
+𝑗≠𝑢exp(sim(Z𝑢, h+
+𝑗)/𝜏)
+(12)
+where sim(·, ·) denotes cosine similarity, and 𝜏is the temperature
+hyperparameter. This ensures that Z𝑢contains valuable signals
+related to common group narrative, rather than some irrelevant
+noise.
+Secondly, To avoid the loss of the abstract narrative information
+of news 𝑢in Z𝑢caused by mere alignment with h+
+𝑢, we introduce
+a decoder 𝑔𝜓and enforce it to reconstruct the original h𝑢from Z𝑢,
+thereby ensuring that Z𝑢contains key information about h𝑢:
+Lrecon =
+𝑔𝜓(z𝑢) −h𝑢
+2
+2
+(13)
+Lastly, to enable the model to discard non-essential, redundant,
+or noisy information in h𝑢and h+
+𝑢, while retaining only the most
+core and essential shared narrative signals in Z𝑢, we accomplish
+this by means of KL divergence.
+Lcompress = KL(𝑞𝜙(Z𝑢|h𝑢, h+
+𝑢)∥𝑝(z)) = 1
+2
+𝑑𝑧
+∑︁
+𝑖=1
+(𝜎2
+𝑢,𝑖+𝜇2
+𝑢,𝑖−1−log𝜎2
+𝑢,𝑖)
+(14)
+Furthermore, we provide detailed theoretical proofs to demonstrate
+that our scheme can effectively alleviate the problem of representa-
+tion collapse, which can be found in Appendix B.
+4.3
+Semantic Representation Alignment Module
+In the task of vetting misinformation, humans tend to leverage
+concrete prior experiences. Our proposed Semantic Representation
+Alignment Module (SRA) serves as a functional analogue to this
+cognitive mechanism. Fundamentally, it pivots the model’s decision-
+making paradigm from direct inference on multimodal features to
+a process of instance-based analogical reasoning.
+As shown in Figure 2, for the given image-text pairs N = [𝐼,𝑇],
+we first obtain their corresponding embeddings by CLIP:
+𝑓CLIP-I = CLIPvis(𝐼),
+𝑓CLIP-T = CLIPtext(𝑇)
+(15)
+where CLIPvis and CLIPtext are the visual and textual encoder of
+CLIP.
+For each sample ⟨𝑓CLIP-I, 𝑓CLIP-T⟩,we calculate the cosine similar-
+ity of image and text modalities separately with the samples in the
+training set 𝐷𝑡𝑟𝑎𝑖𝑛:
+𝑆𝑖𝑚𝑣(𝑖) = 𝑓CLIP-I · V
+|𝑓CLIP-I||V|,𝑆𝑖𝑚𝑡(𝑖) = 𝑓CLIP-T · T
+|𝑓CLIP-T||T|
+(16)
+where V and T are the image and text embeddings from the training
+set 𝐷𝑡𝑟𝑎𝑖𝑛.
+Finally, we select the sample with the highest average similarity
+score as the corresponding demonstration:
+𝐷𝑒𝑚𝑜𝑛(𝑖) = arg max 𝑆𝑖𝑚𝑣(𝑖) + 𝑆𝑖𝑚𝑡(𝑖)
+2
+(17)
+where 𝐷𝑒𝑚𝑜𝑛(𝑖) is the similarity score of demonstration of i-th
+image-text sample.
+Then the retrieved demonstration and the sample, after being
+processed through the instruction template, are input into LLM
+together, as shown in Figure 2. In contrast to the feature con-
+catenation approach of Equation (2), our method integrates vi-
+sual information by embedding dedicated <image> tokens directly
+into the instruction template. This results in an input sequence
+{𝑡1,𝑡2, . . . ,𝑡image, . . . , 𝑡image, . . . ,𝑡𝑛} and a corresponding feature ma-
+trix 𝐸𝑇= {𝑒1,𝑒2, . . . ,𝑒image, . . . ,𝑒𝑖𝑚𝑎𝑔𝑒. . . ,𝑒𝑛}. The placeholder im-
+age embeddings, 𝑒image, are then substituted with the features of
+the retrieved demonstration and the input sample (extracted via
+Equation (2)), respectively, to form the final fused matrix, 𝐸𝑓𝑢𝑠𝑒
+𝑢
+.
+h𝑝𝑟𝑒
+𝑢
+= LLM(𝐸𝑓𝑢𝑠𝑒
+𝑢
+)[−1]
+(18)
+The final representation h𝑝𝑟𝑒
+𝑢
+is then passed through a final clas-
+sification layer with a sigmoid activation function to produce the
+probability of the news being fake, ˆ𝑦𝑢= 𝜎(Linear(h𝑝𝑟𝑒
+𝑢)). The clas-
+sification loss L𝑎𝑙𝑝ℎ𝑎is the Binary Cross-Entropy (BCE) loss:
+L𝑎𝑙𝑝ℎ𝑎= −1
+𝑁
+𝑁
+∑︁
+𝑖=1
+[𝑦𝑖log( ˆ𝑦𝑖) + (1 −𝑦𝑖) log(1 −ˆ𝑦𝑖)] .
+(19)
+
+
+
+===== PAGE 6 =====
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+Note. To prevent information leakage, the SRA and ANA mod-
+ules retrieve relevant samples from the training set solely based on
+the query during both the training and inference phases.
+4.4
+Optimization
+The overall model is trained by minimizing a composite loss func-
+tion L𝑡𝑜𝑡𝑎𝑙, which is shown as below:
+L𝑡𝑜𝑡𝑎𝑙= L𝑎𝑙𝑝ℎ𝑎+ 𝜆1L𝑎𝑙𝑖𝑔𝑛+ 𝜆2L𝑟𝑒𝑐𝑜𝑛+ 𝜆3L𝑐𝑜𝑚𝑝𝑟𝑒𝑠𝑠
+(20)
+where 𝜆1,2,3 are hyperparameter to CIBL loss (4.2.4) respectively.
+5
+EXPERIMENTS
+In this section, we conducted an extensive series of experiments
+to rigorously evaluate the performance of RAMM. Our aim was to
+address the following research questions:
+• (Effectiveness) RQ1: Does our proposed RAMM outper-
+form state-of-the-art fake news detection baselines?
+• (Ablation) RQ2: How do the key components within RAMM
+contribute to its overall performance?
+• (Sensitivity) RQ3: How sensitive is RAMM to its key hy-
+perparameters?
+• (Robustness) RQ4: Can RAMM maintain robust in zero-
+shot strategy?
+• (Efficiency) RQ5: Can RAMM maintain robustness when
+faced with noise interference?
+• (Visualization) RQ6: Can RAMM learn discriminative rep-
+resentations for fake news detection?
+5.1
+Experimental Settings
+5.1.1
+Datasets. Following previous work [43], our model is eval-
+uated on three real-world datasets: two Chinese multi-domain
+datasets, Weibo [46] and Weibo-21 [29], and one English multi-
+domain dataset, FineFake [62]. The Weibo and Weibo-21 datasets
+are divided into nine domains, while FineFake contains six domains
+and one uncategorized domain. We use the same data partitioning
+method as MMDFND [43] and KEAN [62].
+5.1.2
+Baselines. To comprehensively assess the performance of
+our proposed model, we compare it against baseline methods orga-
+nized into three categories: (1) single-modal multi-domain methods,
+including:MDFEND [29], M3DFEND [64] and PLDFEND [33];
+(2) multi-modal multi-domain methods, including: KATMF [39],
+MMDFND [43], DAMMFND [25], IMOL [58] and MMHT [53];
+(3) MLLM methods, including: GSFND [44], SNIFFER [36], NRFE
+[60], BLIP2 [17].
+5.1.3
+Implementation Details. We implement our model using Py-
+Torch 2.0 and conduct all experiments on NVIDIA A100 GPUs. We
+employ BLIP-2 with ViT-L/14 as the visual encoder and Qwen2.5-
+7B and Llama3-8B as the LLM backbone for Chinese and English
+datasets respectively. Qwen3-MAX is used to generate abstract
+narrative. The Q-Former uses 32 learnable queries with hidden di-
+mension d=768. The text embedding model M is SimCSE-RoBERTa-
+large with embedding dimension ˜𝑑= 1024. We train the model for
+3 epochs using AdamW optimizer with learning rate 1e-4, weight
+decay 0.01, and cosine learning rate scheduler with 100 warmup
+steps. The batch size is set to 4. We retrieve k=5 similar samples
+(𝑘𝑖𝑛= 3 and 𝑘𝑜𝑢𝑡= 2) for narrative alignment. The balancing hy-
+perparameter 𝜆1, 𝜆2 and 𝜆3 for the CIBL loss is set to 0.2, 0.1 and
+0.2 respectively.
+5.2
+Overall Performance (RQ1)
+Table 1 and Table 2 present the overall performance comparison
+between RAMM and various baseline methods. The results clearly
+demonstrate the superiority of our proposed approach across all
+three benchmark datasets.
+(1) RAMM achieves new state-of-the-art performance. As
+shown, RAMM consistently outperforms all baselines in terms of
+overall F1, Accuracy, and AUC. For instance, on Weibo-21, RAMM
+achieves an F1-score of 0.968, surpassing the previous best method,
+DAMMFND, by 2.1%. This significant improvement is attributed
+to RAMM’s ability to mitigate negative transfer by judiciously se-
+lecting and integrating knowledge from the most beneficial higher-
+order narratives, thereby generating more robust and generalized
+representations.
+(2) Multimodal multi-domain methods demonstrate su-
+perior performance. The results also indicate that multimodal
+methods (e.g., MMDFND, DAMMFND, RAMM) significantly out-
+perform single-modal methods (e.g., PLDFEND, M3DFEND). This
+highlights the critical importance of leveraging cross-modal in-
+formation for detecting fake news. RAMM further advanced this
+process by not only leveraging multimodal cues but also explicitly
+modeling the narrative connections between similar samples from
+different domains. This made knowledge transfer more effective
+and ultimately led to its outstanding performance.
+(3) MLLM methods demonstrate superior contextual un-
+derstanding. The fundamental difference between traditional mul-
+timodal multi-domain fake news detection models and MLLMs lies
+in their core logic for information processing and fake content
+identification. MLLMs have shifted towards deeper-level "seman-
+tic understanding"—a transition that endows them with signifi-
+cant advantages in accuracy, generalization ability, and robustness.
+Building on this foundation, RAMM leverages high-level narrative
+information extracted from similar samples to enhance the domain
+generalization and reasoning performance of MLLMs, enhancing
+the ability to capture subtle clues.
+5.3
+Ablation Study (RQ2)
+We conduct a series of ablation experiments to validate the effec-
+tiveness of each key component in RAMM. The results, summarized
+in Table 3, demonstrate that every module contributes positively to
+the final performance.
+Effect of Similar Sample Selection. We design three vari-
+ants to analyze the core selection mechanism. (1) -SRA removes
+SRA module, which compels the model to shift from analogical
+reasoning to guidance based on multimodal features . (2) -ANA
+(In-domain. only) replaces our Domain-Aware Homogeneous
+Retrieval (4.2.2) with the approach of only retrieving in-domain
+similar samples. (3) -ANA (CLIP. select) removes narrative infor-
+mation extraction (4.2.1), homogeneous retrieval and information
+fusion are performed based on the image-text similarity of CLIP
+across different samples. Across all datasets, the significant perfor-
+mance degradation of the “-SRA” variant confirms our hypothesis:
+
+
+
+===== PAGE 7 =====
+Retrieval-Augmented Multimodal Model for Fake News Detection
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Table 1: Comparison between RAMM and the latest multi-domain fake news detection methods on Weibo, Weibo-21 and
+FineFake. *: open-source. The best results are in bold, and the second-best results are underlined. The 𝑡-tests validate the
+significance of performance improvements with 𝑝-value ≤0.05.
+Sci.
+Mil.
+Edu.
+Soc.
+Pol.
+Hlth.
+Fin.
+Ent.
+Dis.
+Overall
+Method
+Con.
+Unc.
+Soc.
+Pol.
+Hlth.
+Fin.
+Ent.
+Int.
+F1
+Acc
+AUC
+Weibo
+MDFEND*
+0.772
+0.914
+0.895
+0.905
+0.761
+0.876
+0.810
+0.879
+0.876
+0.903
+0.903
+0.966
+M3DFEND*
+0.794
+0.901
+0.925
+0.910
+0.768
+0.861
+0.901
+0.897
+0.878
+0.927
+0.927
+0.970
+PLDFEND
+0.840
+0.915
+0.882
+0.927
+0.921
+0.920
+0.926
+0.898
+0.447
+0.926
+0.929
+0.975
+KATMF
+0.833
+0.906
+0.921
+0.897
+0.825
+0.895
+0.901
+0.906
+0.892
+0.931
+0.931
+0.968
+MMDFND*
+0.826
+0.909
+0.939
+0.941
+0.732
+0.915
+0.914
+0.919
+0.886
+0.933
+0.933
+0.973
+DAMMFND*
+0.853
+0.911
+0.956
+0.943
+0.822
+0.939
+0.937
+0.956
+0.928
+0.943
+0.944
+0.983
+IMOL*
+0.916
+0.929
+0.937
+0.949
+0.812
+0.915
+0.924
+0.935
+0.921
+0.941
+0.942
+0.979
+MMHT
+0.896
+0.913
+0.941
+0.935
+0.879
+0.920
+0.915
+0.952
+0.902
+0.939
+0.941
+0.979
+RAMM
+0.935
+0.917
+0.952
+0.937
+0.942
+0.966
+0.935
+0.954
+0.931
+0.959
+0.961
+0.989
+Weibo-21
+MDFEND*
+0.832
+0.936
+0.893
+0.895
+0.888
+0.938
+0.897
+0.904
+0.902
+0.914
+0.914
+0.969
+M3DFEND*
+0.831
+0.948
+0.901
+0.906
+0.885
+0.943
+0.903
+0.929
+0.891
+0.920
+0.920
+0.976
+PLDFEND
+0.910
+0.959
+0.901
+0.911
+0.888
+0.940
+0.885
+0.936
+0.887
+0.925
+-
+-
+KATMF
+0.912
+0.930
+0.911
+0.898
+0.899
+0.917
+0.873
+0.935
+0.900
+0.925
+0.929
+0.974
+MMDFND*
+0.935
+0.955
+0.854
+0.942
+0.963
+0.923
+0.881
+0.961
+0.917
+0.940
+0.940
+0.976
+DAMMFND*
+0.932
+0.953
+0.932
+0.917
+0.982
+0.919
+0.941
+0.990
+0.945
+0.947
+0.947
+0.985
+IMOL*
+0.857
+0.921
+0.954
+0.947
+0.852
+0.932
+0.945
+0.953
+0.925
+0.943
+0.944
+0.981
+MMHT
+0.942
+0.949
+0.929
+0.937
+0.956
+0.915
+0.914
+0.929
+0.923
+0.945
+0.945
+0.983
+RAMM
+0.962
+0.956
+0.927
+0.961
+0.974
+0.979
+0.983
+0.959
+0.937
+0.968
+0.969
+0.991
+FineFake
+MDFEND*
+-
+-
+-
+-
+-
+-
+-
+-
+-
+0.781
+0.788
+-
+M3DFEND*
+-
+-
+-
+-
+-
+-
+-
+-
+-
+0.772
+0.781
+-
+PLDFEND
+-
+0.724
+0.638
+0.785
+0.766
+0.777
+0.829
+0.835
+-
+0.789
+0.790
+0.873
+KATMF
+-
+0.727
+0.701
+0.758
+0.756
+0.805
+0.839
+0.846
+-
+0.782
+0.786
+0.869
+MMDFND*
+-
+0.747
+0.740
+0.760
+0.768
+0.767
+0.831
+0.839
+-
+0.786
+0.789
+0.868
+DAMMFND*
+-
+0.741
+0.746
+0.787
+0.776
+0.803
+0.838
+0.853
+-
+0.792
+0.794
+0.878
+IMOL*
+-
+0.750
+0.736
+0.792
+0.774
+0.809
+0.842
+0.851
+-
+0.793
+0.795
+0.880
+MMHT
+-
+0.739
+0.735
+0.775
+0.770
+0.795
+0.837
+0.845
+-
+0.789
+0.791
+0.873
+RAMM
+-
+0.734
+0.757
+0.799
+0.792
+0.793
+0.850
+0.861
+-
+0.809
+0.811
+0.892
+Table 2: Comparison between RAMM and the latest MLLM
+methods on Weibo and FineFake datasets.
+Datasets
+Method
+Accuracy
+F1 score
+AUC
+Weibo
+BLIP2*
+0.872
+0.871
+0.943
+SNIFFER*
+0.903
+0.902
+0.957
+GSFND
+0.938
+0.937
+0.975
+NRFE
+0.945
+0.944
+0.978
+RAMM
+0.961
+0.959
+0.989
+FineFake
+BLIP2*
+0.757
+0.756
+0.838
+SNIFFER*
+0.781
+0.770
+0.852
+GSFND
+0.785
+0.783
+0.865
+NRFE
+0.799
+0.797
+0.881
+RAMM
+0.811
+0.809
+0.892
+the approach based on analogical reasoning significantly enhances
+the semantic understanding capabilities of MLLMs. Similarly, the
+“-ANA (CLIP select)” variant confirms the core issue of previous
+models: retrieving samples solely based on feature similarity fails
+to capture the hidden high-level narrative correlations behind clus-
+ters under the "cluster propagation" mode, resulting in a decline in
+reasoning performance. The lesser, yet still notable, decline in the
+“-ANA (In-domain. only) ” variant validates the importance of mod-
+eling the out-domain relationships for generalization performance.
+Effect of Information Bottleneck and Optimization. We an-
+alyze the CIBL strategy (4.2.4) with two variants. (1) -CIBL (Force.
+Align) remove variational encoder and replaces "general abstract
+description" Z𝑢with h𝑢to achieve forced alignment. (2) -CIBL
+(Simple. Loss) removes Lcompress, Lalign and Lrecon, only use con-
+trastive loss for optimization. The performance degradation in both
+cases underscores the benefits of our designs. The results for “-CIBL
+(Force. Align)” show that forced alignment will impair the valuable
+personalized information in h𝑢. Similarly, the results for “-CIBL
+Table 3: Ablation study of RAMM on three datasets. We report
+the F1-score.
+Variant
+Weibo
+Weibo-21
+FineFake
+RAMM (Full Model)
+0.959
+0.968
+0.809
+On Similar Sample Selection:
+-SRA
+0.937 (-2.2%)
+0.947 (-2.1%)
+0.785 (-2.4%)
+-ANA (In-domain. only)
+0.947 (-1.2%)
+0.955 (-1.3%)
+0.791 (-1.8%)
+-ANA (CLIP. select)
+0.941 (-1.8%)
+0.952 (-1.6%)
+0.787 (-2.2%)
+On Information Bottleneck and Optimization:
+-CIBL (Force. Align)
+0.943 (-1.6%)
+0.951 (-1.7%)
+0.794 (-1.5%)
+-CIBL (Simple. Loss)
+0.940 (-1.9%)
+0.953 (-1.5%)
+0.793 (-1.6%)
+
+
+
+===== PAGE 8 =====
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+1
+2
+3
+4
+5
+Number of In-domain Sample (kin)
+0.948
+0.950
+0.952
+0.954
+0.956
+0.958
+0.960
+0.962
+F1-score
+In-domain Sample (kin)
+F1-score
+Accuracy
+1
+2
+3
+4
+5
+Number of Out-domain Sample (kout)
+0.952
+0.954
+0.956
+0.958
+0.960
+Out-domain Sample (kout)
+F1-score
+Accuracy
+0.5
+1.0
+1.5
+2.0
+Loss Weight (
+1)
+0.950
+0.952
+0.954
+0.956
+0.958
+0.960
+F1-score
+Lambda 1 (
+1)
+F1-score
+Accuracy
+0.01
+0.10
+0.50 1.00 2.00
+Loss Weight (
+2)
+0.9450
+0.9475
+0.9500
+0.9525
+0.9550
+0.9575
+0.9600
+Lambda 2 (
+2)
+F1-score
+Accuracy
+0.948
+0.950
+0.952
+0.954
+0.956
+0.958
+0.960
+0.962
+0.954
+0.956
+0.958
+0.960
+0.962
+Accuracy
+0.952
+0.954
+0.956
+0.958
+0.960
+0.962
+0.9450
+0.9475
+0.9500
+0.9525
+0.9550
+0.9575
+0.9600
+Accuracy
+Figure 3: Parameter sensitivity analysis of four key hyper-
+parameters on the Weibo dataset, evaluated by F1-score and
+Accuracy.
+(Simple. Loss)” demonstrate that multiple loss will capture robust
+representation and discard non-essential or noisy information.
+5.4
+Parameter Sensitivity Analysis (RQ3)
+We analyzed the sensitivity of RAMM to four key hyperparameters
+on the Weibo dataset: the number of selected in-domain samples𝑘𝑖𝑛,
+the number of selected in-domain samples 𝑘𝑜𝑢𝑡, the loss balancing
+coefficient 𝜆1 and 𝜆2.
+As shown in Figure 3, RAMM demonstrates robust performance
+across a reasonable range for all tested hyperparameters. For in-
+stance, performance peaks when the number of selected in-domain
+samples 𝑘𝑖𝑛is 3 and the number of selected out-domain samples
+𝑘𝑜𝑢𝑡is 2, indicating that a moderate number of retrived samples can
+effectively capture domain characteristics and that fusing knowl-
+edge from a few highly relevant domains is more effective than
+including too many. The model is relatively stable with loss balanc-
+ing coefficient from 0.1 to 0.3. This overall robustness reduces the
+burden of extensive hyperparameter tuning and demonstrates the
+stability of our proposed framework.
+5.5
+Domain Generalization Analysis (RQ4)
+To verify the model’s generalization performance, we conducted a
+Leave-domain-out experiment, which involves excluding domains
+during training and testing its zero-shot performance on that ex-
+cluded domain. We removed one domain and three domains respec-
+tively from the Weibo dataset and the FineFake dataset for training
+and testing. As shown in Figure 4, NRFE, SNIFFER, and BLIP2 all
+exhibited lower performance than RAMM after the Leave-domain-
+out experiment—this confirms the superior generalization of our
+model. This is attributed to our model’s ability to extract high-level
+narrative features from different domains, thereby improving the
+model’s associative ability and further enhancing its generalization.
+5.6
+Robustness to Retrieval Noise (RQ5)
+To evaluate the robustness of our proposed model, we simulate a
+noisy retrieval environment by "contaminating" the top-K retrieved
+Table 4: RAMM robustness comparison on three datasets
+under increasing retrieval noise.
+Noise
+Weibo
+Weibo-21
+FineFake
+Acc
+F1
+AUC
+Acc
+F1
+AUC
+Acc
+F1
+AUC
+-20%
+95.6
+95.6
+98.8
+96.7
+96.6
+99.1
+80.9
+80.6
+88.9
+-40%
+95.2
+95.1
+98.1
+96.2
+96.2
+98.9
+80.3
+80.1
+88.6
+-60%
+94.5
+94.4
+98.2
+95.5
+95.5
+98.6
+79.7
+79.4
+88.1
+-Base(0%) 96.1 95.9
+98.9
+96.9 96.8
+99.1
+81.1 80.9
+89.2
+items for each source news. Specifically, for a given noise ratio 𝑝,
+we randomly replace 𝑝% of the top-ranked retrieved items with
+randomly selected items from the the dataset. These distractors
+are irrelevant to the source news. The baseline performance is
+established at a 0% noise ratio. We then incrementally increase the
+noise ratio to 20%, 40%, 60%.
+As show in Table 4, the robustness of our model is demonstrated
+by its sustained performance under noisy conditions. With minor
+noise interference (e.g., 20%), the model’s performance remains
+relatively stable, highlighting its capacity to filter secondary irrel-
+evancies. Crucially, even under significant noise, its performance
+does not fall below that of leading baselines, confirming the resilient
+nature of our approach.
+5.7
+Visualization Analysis (RQ6)
+Figure 5 presents t-SNE visualizations of features learned by RAMM,
+DAMMFND, and MDFEND on Weibo and Weibo21 test sets. RAMM
+generates fewer outliers in fake news representations and demon-
+strates reduced overlap between real and fake news embeddings
+compared to DAMMFND and MDFEND. These findings further
+substantiate RAMM’s superior performance in multimodal fake
+news detection.
+5.8
+Robustness to LLM backbone
+To validate the robustness of the proposed model across different
+backbones, extensive experiments were conducted. As illustrated
+in Figure 6, every configuration of our framework, regardless of the
+underlying LLM backbone, significantly surpasses the performance
+of the state-of-the-art baseline, NRFE, on the Weibo, Weibo-21,
+and FineFake benchmarks. Notably, Qwen2.5-72B emerges as the
+top-performing backbone. Due to its parameter size and reasoning
+Domain Sci.
+Domain Mil. Edu. Soc.
+83
+86
+89
+F1-score
+85.5
+81.2
+88.3
+83.7
+87.6
+82.5
+90.5
+87.3
+2.2%
+3.6%
+(a) Weibo
+BLIP2
+SNIFFER
+NRFE
+RAMM
+Domain Con.
+Domain Unc. Soc. Pol.
+63
+65
+67
+69
+F1-score
+65.1
+62.7
+63.6
+61.7
+67.9
+65.4
+70.5
+67.3
+2.6%
+1.9%
+(b) FineFake
+BLIP2
+SNIFFER
+NRFE
+RAMM
+Figure 4: Performance comparison of domain generalization
+analysis on two datasets.
+
+
+
+===== PAGE 9 =====
+Retrieval-Augmented Multimodal Model for Fake News Detection
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+(a) RAMM
+(b) DAMMFND
+(c) MDFEND
+Weibo
+Weibo-21
+Figure 5: T-SNE showcase the classification outcomes in
+Weibo and Weibo-21 dataset.
+complexity, we chose Qwen2.5-7B for Chinese datasets and Llama3-
+8B for the English dataset. These configurations achieved peak F1-
+scores of 95.93 (Weibo), 96.82 (Weibo-21), and 80.92 (FineFake). More
+importantly, the performance variance among the other leading
+LLMs is marginal, indicating that our framework is not merely
+dependent on a single model’s capabilities. This high degree of
+performance consistency demonstrates the framework’s strong
+robustness and its ability to effectively harness the reasoning power
+of diverse LLMs for reliable fake news detection.
+94.0
+94.5
+95.0
+95.5
+96.0
+96.5
+97.0
+RAMM Performance (F1-Score %)
+96.15
+96.34
+95.93
+95.76
+95.51
+95.39
+95.15
+95.31
+Weibo
+Best Baseline (NRFE): 94.43
+95.0
+95.5
+96.0
+96.5
+97.0
+97.5
+98.0
+96.97
+97.15
+96.82
+96.45
+96.35
+96.31
+95.92
+96.06
+Weibo-21
+Best Baseline (NRFE): 95.17
+79.5
+80.0
+80.5
+81.0
+81.5
+82.0
+82.5
+81.12
+81.56
+80.65
+80.92
+80.53
+80.55
+80.39
+80.53
+FineFake
+Best Baseline (NRFE): 79.72
+Llama-3.1-70B
+Qwen2.5-72B
+Qwen2.5-7B
+Llama3-8B
+Qwen3-4B
+Llama3.2-3B
+Qwen2.5-0.5B
+Llama3.2-1B
+Figure 6: Performance comparison of LLM backbones.
+6
+Conclusion
+In this paper, we address the cluster propagation issue in multi-
+domain and multi-modal fake news detection, which arises from
+the inability of previous models to capture the high-order narra-
+tive information underlying clusters. RAMM is designed to emu-
+late the human fact-checking process of "association and analogy."
+It achieves this paradigm shift through two core components: 1)
+Abstract Narrative Alignment Module, which, for the first time,
+explicitly models high-level, cross-instance narrative consistency;
+2) Semantic Representation Alignment Module, which introduces
+an instance-based analogical reasoning mechanism. Extensive ex-
+perimental results on three public datasets validate the efficacy of
+our proposed approach.
+References
+[1] Yixuan Chen, Dongsheng Li, Peng Zhang, Jie Sui, Qin Lv, Lu Tun, and Li Shang.
+2022. Cross-modal ambiguity learning for multimodal fake news detection. In
+Proceedings of the ACM web conference 2022. 2897–2905.
+[2] Zhenghan Chen, Changzeng Fu, and Xunzhu Tang. 2023. Multi-domain fake
+news detection with fuzzy labels. In International Conference on Database Systems
+for Advanced Applications. Springer, 331–343.
+[3] Limeng Cui, Kai Shu, Suhang Wang, Dongwon Lee, and Huan Liu. 2019. defend:
+A system for explainable fake news detection. In Proceedings of the 28th ACM
+international conference on information and knowledge management. 2961–2964.
+[4] Xiaoxi Cui, Weihai Lu, Yu Tong, Yiheng Li, and Zhejun Zhao. 2025. Diffusion-
+based multi-modal synergy interest network for click-through rate prediction.
+In Proceedings of the 48th International ACM SIGIR Conference on Research and
+Development in Information Retrieval. 581–591.
+[5] Jannatul Ferdush, Joarder Kamruzzaman, Gour Karmakar, Iqbal Gondal, and
+Rajkumar Das. 2025. Cross-Domain Fake News Detection Through Fusion of
+Evidence from Multiple Social Media Platforms. Future Internet 17, 2 (2025), 61.
+[6] Tianyu Gao, Xingcheng Yao, and Danqi Chen. 2021. Simcse: Simple contrastive
+learning of sentence embeddings. In Proceedings of the 2021 conference on empirical
+methods in natural language processing. 6894–6910.
+[7] Shuzhi Gong, Richard Sinnott, Jianzhong Qi, and Cecile Paris. 2025. Unseen fake
+news detection through casual debiasing. In Companion Proceedings of the ACM
+on Web Conference 2025. 981–985.
+[8] Daniel A González-Padilla and Leonardo Tortolero-Blanco. 2020. Social media
+influence in the COVID-19 Pandemic. International braz j urol 46 (2020), 120–124.
+[9] Fiza Gulzar Hussain, Muhammad Wasim, Seemab Hameed, Abdur Rehman,
+Muhammad Nabeel Asim, and Andreas Dengel. 2025. Fake news detection
+landscape: Datasets, data modalities, AI approaches, their challenges, and future
+perspectives. IEEE Access (2025).
+[10] Korir Nancy Jeptoo and Chengjie Sun. 2024. Enhancing fake news detection
+with large language models through multi-agent debates. In CCF International
+Conference on Natural Language Processing and Chinese Computing. Springer,
+474–486.
+[11] Ye Jiang, Taihang Wang, Xiaoman Xu, Yimin Wang, Xingyi Song, and Diana
+Maynard. 2025. Cross-modal augmentation for few-shot multimodal fake news
+detection. Engineering Applications of Artificial Intelligence 142 (2025), 109931.
+[12] Betul Keles, Niall McCrae, and Annmarie Grealish. 2020. A systematic review:
+the influence of social media on depression, anxiety and psychological distress
+in adolescents. International journal of adolescence and youth 25, 1 (2020), 79–93.
+[13] Dhruv Khattar, Jaipal Singh Goud, Manish Gupta, and Vasudeva Varma. 2019.
+Mvae: Multimodal variational autoencoder for fake news detection. In The world
+wide web conference. 2915–2921.
+[14] Sejeong Kwon, Meeyoung Cha, Kyomin Jung, Wei Chen, and Yajun Wang. 2013.
+Prominent features of rumor propagation in online social media. In 2013 IEEE
+13th international conference on data mining. IEEE, 1103–1108.
+[15] Batool Lakzaei, Mostafa Haghir Chehreghani, and Alireza Bagheri. 2025.
+Neighborhood-Order Learning Graph Attention Network for Fake News De-
+tection. arXiv preprint arXiv:2502.06927 (2025).
+[16] Chenhui Li and Weihai Lu. 2026. Decoding the Market’s Pulse: Context-Enriched
+Agentic Retrieval Augmented Generation for Predicting Post-Earnings Price
+Shocks. In Proceedings of the 19th Conference of the European Chapter of the
+Association for Computational Linguistics (Volume 1: Long Papers). 3055–3073.
+[17] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi. 2023. Blip-2: Bootstrapping
+language-image pre-training with frozen image encoders and large language
+models. In International conference on machine learning. PMLR, 19730–19742.
+[18] Jinjin LI, Guoming SANG, and Yijia ZHANG. 2024. APK-CNN and Transformer-
+enhanced multi-domain fake news detection model. Journal of Computer Appli-
+cations (2024), 1930–1939.
+[19] Xinyi Li, Yongfeng Zhang, and Edward C Malthouse. 2024. Large language model
+agent for fake news detection. arXiv preprint arXiv:2405.01593 (2024).
+[20] Yuyuan Li, Chaochao Chen, Yizhao Zhang, Weiming Liu, Lingjuan Lyu, Xiaolin
+Zheng, Dan Meng, and Jun Wang. 2023. Ultrare: Enhancing receraser for recom-
+mendation unlearning via error decomposition. Advances in Neural Information
+Processing Systems 36 (2023), 12611–12625.
+[21] Yuyuan Li, Yizhao Zhang, Weiming Liu, Xiaohua Feng, Zhongxuan Han,
+Chaochao Chen, and Chenggang Yan. 2025. Multi-Objective Unlearning in Rec-
+ommender Systems via Preference Guided Pareto Exploration. IEEE Transactions
+on Services Computing (2025).
+[22] Shijie Liu, Ruixin Ding, Weihai Lu, Jun Wang, Mo Yu, Xiaoming Shi, and Wei
+Zhang. 2025. Coherency improved explainable recommendation via large lan-
+guage model. In Proceedings of the AAAI Conference on Artificial Intelligence,
+Vol. 39. 12201–12209.
+[23] Wayne Lu and Xiaoxi Cui. 2026. DEALT: LLM-driven Diversity-Enhanced Data
+Augmentation for Long-Tail Text Classification. In Proceedings of the AAAI Con-
+ference on Artificial Intelligence, Vol. 40. 32338–32346.
+[24] Wayne Lu and Yiheng Li. 2026. From Blind Transfer to Wise Selection: Prototype-
+Driven Neighbor-Domain Adaptation for Fake News Detection. In Proceedings of
+the AAAI Conference on Artificial Intelligence, Vol. 40. 818–826.
+[25] Weihai Lu, Yu Tong, and Zhiqiu Ye. 2025. Dammfnd: Domain-aware multimodal
+multi-view fake news detection. In Proceedings of the AAAI Conference on Artificial
+Intelligence, Vol. 39. 559–567.
+[26] Weihai Lu and Li Yin. 2025. Dmmd4sr: Diffusion model-based multi-level multi-
+modal denoising for sequential recommendation. In Proceedings of the 33rd ACM
+International Conference on Multimedia. 6363–6372.
+
+
+
+===== PAGE 10 =====
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+[27] Xiaoxiao Ma, Yuchen Zhang, Kaize Ding, Jian Yang, Jia Wu, and Hao Fan. 2024.
+On fake news detection with LLM enhanced semantics mining. In Proceedings
+of the 2024 Conference on Empirical Methods in Natural Language Processing.
+508–521.
+[28] Despoina Mouratidis, Andreas Kanavos, and Katia Kermanidis. 2025. From
+misinformation to insight: machine learning strategies for fake news detection.
+Information 16, 3 (2025), 189.
+[29] Qiong Nan, Juan Cao, Yongchun Zhu, Yanyan Wang, and Jintao Li. 2021. MD-
+FEND: Multi-domain fake news detection. In Proceedings of the 30th ACM inter-
+national conference on information & knowledge management. 3343–3347.
+[30] Aaron van den Oord, Yazhe Li, and Oriol Vinyals. 2018. Representation learning
+with contrastive predictive coding. arXiv preprint arXiv:1807.03748 (2018).
+[31] Eleftheria Papageorgiou, Christos Chronis, Iraklis Varlamis, and Yassine Himeur.
+2024. A survey on the use of large language models (llms) in fake news. Future
+Internet 16, 8 (2024), 298.
+[32] Eleftheria Papageorgiou, Iraklis Varlamis, and Christos Chronis. 2025. Harnessing
+Large Language Models and deep neural networks for fake news detection.
+Information 16, 4 (2025), 297.
+[33] Zitao Peng, Nankai Lin, Yongmei Zhou, Dong Zhou, and Aimin Yang. 2023.
+Prompt learning for low-resource multi-domain fake news detection. In 2023
+international conference on asian Language Processing (IALP). IEEE, 314–319.
+[34] Gordon Pennycook and David G Rand. 2021. The psychology of fake news. Trends
+in cognitive sciences 25, 5 (2021), 388–402.
+[35] Ben Poole, Sherjil Ozair, Aaron Van Den Oord, Alex Alemi, and George Tucker.
+2019. On variational bounds of mutual information. In International conference
+on machine learning. PMLR, 5171–5180.
+[36] Peng Qi, Zehong Yan, Wynne Hsu, and Mong Li Lee. 2024. Sniffer: Multimodal
+large language model for explainable out-of-context misinformation detection. In
+Proceedings of the IEEE/CVF conference on computer vision and pattern recognition.
+13052–13062.
+[37] Shaina Raza, Drai Paulen-Patterson, and Chen Ding. 2025. Fake news detection:
+comparative evaluation of BERT-like models and large language models with
+generative AI-annotated data. Knowledge and Information Systems 67, 4 (2025),
+3267–3292.
+[38] Amila Silva, Ling Luo, Shanika Karunasekera, and Christopher Leckie. 2021. Em-
+bracing domain differences in fake news: Cross-domain fake news detection using
+multi-modal data. In Proceedings of the AAAI conference on artificial intelligence,
+Vol. 35. 557–565.
+[39] Chenguang Song, Nianwen Ning, Yunlei Zhang, and Bin Wu. 2021. Knowl-
+edge augmented transformer for adversarial multidomain multiclassification
+multimodal fake news detection. Neurocomputing 462 (2021), 88–100.
+[40] Malliga Subramanian, B Premjith, Kogilavani Shanmugavadivel, Santhiya
+Pandiyan, Balasubramanian Palani, and Bharathi Raja Chakravarthi. 2025.
+Overview of the shared task on fake news detection in dravidian languages-
+DravidianLangTech@ NAACL 2025. In Proceedings of the fifth workshop on speech,
+vision, and language technologies for dravidian languages. 759–767.
+[41] Naftali Tishby, Fernando C Pereira, and William Bialek. 2000. The information
+bottleneck method. arXiv preprint physics/0004057 (2000).
+[42] Yu Tong, Weihai Lu, Xiaoxi Cui, Yifan Mao, and Zhejun Zhao. 2025. Dapt: Domain-
+aware prompt-tuning for multimodal fake news detection. In Proceedings of the
+33rd ACM International Conference on Multimedia. 7902–7911.
+[43] Yu Tong, Weihai Lu, Zhe Zhao, Song Lai, and Tong Shi. 2024. Mmdfnd: Multi-
+modal multi-domain fake news detection. In Proceedings of the 32nd ACM Inter-
+national Conference on Multimedia. 1178–1186.
+[44] Zhao Tong, Yimeng Gu, Huidong Liu, Qiang Liu, Shu Wu, Haichao Shi, and
+Xiao-Yu Zhang. 2025. Generate first, then sample: Enhancing fake news detection
+with LLM-augmented reinforced sampling. In Proceedings of the 63rd Annual
+Meeting of the Association for Computational Linguistics (Volume 1: Long Papers).
+24276–24290.
+[45] Bo Wang, Jing Ma, Hongzhan Lin, Zhiwei Yang, Ruichao Yang, Yuan Tian, and
+Yi Chang. 2024. Explainable fake news detection with large language model via
+defense among competing wisdom. In Proceedings of the ACM web conference
+2024. 2452–2463.
+[46] Yaqing Wang, Fenglong Ma, Zhiwei Jin, Ye Yuan, Guangxu Xun, Kishlay Jha, Lu
+Su, and Jing Gao. 2018. Eann: Event adversarial neural networks for multi-modal
+fake news detection. In Proceedings of the 24th acm sigkdd international conference
+on knowledge discovery & data mining. 849–857.
+[47] Xiaolong Wei, Yuehu Dong, Xingliang Wang, Xingyu Zhang, Zhejun Zhao, Dong-
+dong Shen, Long Xia, and Dawei Yin. 2026. Beyond react: A planner-centric
+framework for complex tool-augmented llm reasoning. In Proceedings of the AAAI
+Conference on Artificial Intelligence, Vol. 40. 33845–33853.
+[48] Xiaolong Wei, Bo Lu, Xingyu Zhang, Zhejun Zhao, Dongdong Shen, Long Xia,
+and Dawei Yin. 2025. Igniting creative writing in small language models: Llm-as-
+a-judge versus multi-agent refined rewards. In Proceedings of the 2025 Conference
+on Empirical Methods in Natural Language Processing. 17171–17197.
+[49] Shitao Xiao, Zheng Liu, Peitian Zhang, Niklas Muennighoff, Defu Lian, and
+Jian-Yun Nie. 2024. C-pack: Packed resources for general chinese embeddings.
+In Proceedings of the 47th international ACM SIGIR conference on research and
+development in information retrieval. 641–649.
+[50] Aolin Xu and Maxim Raginsky. 2017. Information-theoretic analysis of gen-
+eralization capability of learning algorithms. Advances in neural information
+processing systems 30 (2017).
+[51] Junxiao Xue, Yabo Wang, Yichen Tian, Yafei Li, Lei Shi, and Lin Wei. 2021. De-
+tecting fake news by exploring the consistency of multimodal data. Information
+Processing & Management 58, 5 (2021), 102610.
+[52] Kaiying Yan, Moyang Liu, Yukun Liu, Ruibo Fu, Zhengqi Wen, Jianhua Tao, Xuefei
+Liu, and Guanjun Li. 2025. MTPareto: A MultiModal Targeted Pareto Framework
+for Fake News Detection. In ICASSP 2025-2025 IEEE International Conference on
+Acoustics, Speech and Signal Processing (ICASSP). IEEE, 1–5.
+[53] Xuankai Yang, Yan Wang, Xiuzhen Zhang, Shoujin Wang, Huaxiong Wang,
+and Kwok Yan Lam. 2025. A macro-and micro-hierarchical transfer learning
+framework for cross-domain fake news detection. In Proceedings of the ACM on
+Web Conference 2025. 5297–5307.
+[54] Jingyuan Yi, Zeqiu Xu, Tianyi Huang, and Peiyang Yu. 2025. Challenges and
+innovations in llm-powered fake news detection: A synthesis of approaches
+and future directions. In Proceedings of the 2025 2nd international conference on
+generative artificial intelligence and information security. 87–93.
+[55] Xinquan Yu, Ziqi Sheng, Wei Lu, Xiangyang Luo, and Jiantao Zhou. 2025. Racmc:
+Residual-aware compensation network with multi-granularity constraints for
+fake news detection. In Proceedings of the AAAI Conference on Artificial Intelli-
+gence, Vol. 39. 986–994.
+[56] Zhi Zeng, Minnan Luo, Xiangzheng Kong, Huan Liu, Hao Guo, Hao Yang, Zihan
+Ma, and Xiang Zhao. 2024. Mitigating World Biases: A Multimodal Multi-View
+Debiasing Framework for Fake News Video Detection. In Proceedings of the 32nd
+ACM International Conference on Multimedia. 6492–6500.
+[57] Zhi Zeng, Jiaying Wu, Minnan Luo, Xiangzheng Kong, Zihan Ma, Guang Dai,
+and Qinghua Zheng. 2025. Understand, Refine and Summarize: Multi-View
+Knowledge Progressive Enhancement Learning for Fake News Video Detection.
+In Proceedings of the 33rd ACM International Conference on Multimedia. 9216–
+9225.
+[58] Zhi Zeng, Jiaying Wu, Minnan Luo, Herun Wan, Xiangzheng Kong, Zihan Ma,
+Guang Dai, and Qinghua Zheng. 2025. Imol: Incomplete-modality-tolerant learn-
+ing for multi-domain fake news video detection. In Proceedings of the 63rd Annual
+Meeting of the Association for Computational Linguistics (Volume 1: Long Papers).
+30921–30933.
+[59] Zhi Zeng, Yifei Yang, Jiaying Wu, Xulang Zhang, Xiangzheng Kong, Herun Wan,
+Zihan Ma, and Minnan Luo. 2026. From Manipulation to Mistrust: Explaining
+Diverse Micro-Video Misinformation for Robust Debunking in the Wild. arXiv
+preprint arXiv:2603.25423 (2026).
+[60] Chaowei Zhang, Zongling Feng, Zewei Zhang, Jipeng Qiang, Guandong Xu, and
+Yun Li. 2025. Is llms hallucination usable? llm-based negative reasoning for fake
+news detection. In Proceedings of the AAAI Conference on Artificial Intelligence,
+Vol. 39. 1031–1039.
+[61] Xing Zhou, Juan Cao, Zhiwei Jin, Fei Xie, Yu Su, Dafeng Chu, Xuehui Cao, and
+Junqiang Zhang. 2015. Real-time news cer tification system on sina weibo. In
+Proceedings of the 24th international conference on world wide web. 983–988.
+[62] Ziyi Zhou, Xiaoming Zhang, Litian Zhang, Jiacheng Liu, Senzhang Wang, Zheng
+Liu, Xi Zhang, Chaozhuo Li, and Philip S Yu. 2024. Finefake: A knowledge-
+enriched dataset for fine-grained multi-domain fake news detection. arXiv
+preprint arXiv:2404.01336 (2024).
+[63] Yongchun Zhu, Qiang Sheng, Juan Cao, Shuokai Li, Danding Wang, and Fuzhen
+Zhuang. 2022. Generalizing to the future: Mitigating entity bias in fake news
+detection. In Proceedings of the 45th international ACM SIGIR conference on research
+and development in information retrieval. 2120–2125.
+[64] Yongchun Zhu, Qiang Sheng, Juan Cao, Qiong Nan, Kai Shu, Minghui Wu, Jindong
+Wang, and Fuzhen Zhuang. 2022. Memory-guided multi-view multi-domain fake
+news detection. IEEE Transactions on Knowledge and Data Engineering 35, 7
+(2022), 7178–7191.
+
+
+
+===== PAGE 11 =====
+Retrieval-Augmented Multimodal Model for Fake News Detection
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+A
+Experimental Settings
+A.1
+Datasets
+Our model is evaluated on three real-world datasets: two Chinese
+multi-domain datasets, Weibo [46] and Weibo-21 [29], and one Eng-
+lish multi-domain dataset, Fine-Fake [62]. The Weibo and Weibo-21
+datasets are divided into nine domains, while FineFake contains six
+domains and one uncategorized domain.
+Table 5: Data Statistics of Weibo
+domain
+Science
+Military
+Education
+International
+Politics
+real
+139
+160
+273
+45
+112
+fake
+91
+122
+148
+41
+164
+all
+230
+282
+421
+86
+276
+domain
+Health
+Finance
+Entertainment
+Society
+All
+real
+186
+137
+1,120
+1,443
+3,615
+fake
+519
+143
+508
+2,372
+4,108
+all
+705
+280
+1,628
+3,815
+7,723
+Table 6: Data Statistics of Weibo21
+domain
+Science
+Military
+Education
+Disasters
+Politics
+real
+143
+121
+243
+185
+306
+fake
+93
+222
+248
+591
+546
+all
+236
+343
+491
+776
+852
+domain
+Health
+Finance
+Entertainment
+Society
+All
+real
+485
+959
+1,000
+1,198
+4,640
+fake
+515
+362
+440
+1,471
+4,488
+all
+1,000
+1,321
+1,440
+2,669
+9,128
+Table 7: Data Statistics of FineFake
+domain
+Politics
+Entertainment
+Business
+Health
+Society
+real
+3,722
+2,514
+527
+438
+2,236
+fake
+2,005
+1,185
+476
+272
+1,703
+all
+5,727
+3,699
+1,003
+710
+3,939
+domain
+Conflict
+Stream
+Official
+Fact-Check
+All
+real
+979
+3,895
+4,138
+2,474
+10,507
+fake
+739
+1,105
+215
+5,082
+6,402
+all
+1,718
+5,000
+4,353
+7,556
+16,909
+A.2
+Baselines
+To comprehensively assess the performance of our proposed model,
+we compare it against baseline methods organized into three cat-
+egories: (1) single-modal multi-domain methods, including: MD-
+FEND [29], M3DFEND [64] and PLDFEND [33]; (2) multi-modal
+multi-domain methods, including: KATMF [39], MMDFND [43],
+DAMMFND [25], IMOL [58] and MMHT [53]; (3) MLLM methods,
+including: BLIP2 [17], SNIFFER [36], GSFND [44], NRFE [60].
+Descriptions of baseline methods are as follows:
+(1) Single-Modal Multi-Domain Methods:
+• MDFEND, which utilizes a domain gate to aggregate mul-
+tiple representations extracted by a mixture of experts.
+• M3DFEND, which models news from semantic, emotional,
+and stylistic perspectives, and uses a domain memory
+bank and domain adapter to address domain shift and
+incomplete domain labels.
+• PLDFEND, which applies prompt-based learning to multi-
+domain fake news detection by designing sophisticated
+prompt templates and corresponding verbalizers.
+(2) Multimodal Multi-Domain Methods:
+• KATMF, which employs adversarial multi-task learning
+and a knowledge-enhanced Transformer to capture the
+differences in feature distributions across various news
+domains.
+• MMDFND, which utilizes an improved PLE (Progressive
+Layered Extraction) module to capture both the common-
+alities and specificities among domains and incorporates
+AdaIN (Adaptive Instance Normalization) for multimodal
+fusion.
+• DAMMFND, which extracts more accurate domain infor-
+mation through Domain Disentanglement, while simulta-
+neously mitigating negative transfer between domains.
+• IMOL, which addresses the issue of incomplete modalities
+in multi-domain fake news video detection by reconstruct-
+ing missing modalities through cross-modal consistency
+and refining transferable knowledge via cross-sample as-
+sociative reasoning.
+• MMHT, which utilizes a macro-micro hierarchical Trans-
+former architecture for multimodal fake news detection.
+(3) MLLM Methods:
+• GSFND, adopting an LLM to generate fake news in three
+different styles which are later incorporated into the train-
+ing set, to augment the representation of fake news.
+• SNIFFER, a multimodal large language model designed
+for misinformation detection and explanation, which em-
+ploys a two-stage instruction tuning process on Instruct-
+BLIP.
+• NRFE, which leverages positive or negative news-reasoning
+pairs for learning the semantic consistency between them.
+• BLIP2, which bootstraps vision-language pre-training
+from frozen pre-trained image encoders and large lan-
+guage models using a lightweight Querying Transformer
+to bridge the modality gap.
+A.3
+Implementation Details
+To extract a stable and high-quality core narrative summary, A𝑢,
+from the prompt P𝑢, we utilize the powerful Qwen3-MAX Vision-
+Language Model. The choice is deliberate: it allows for the direct,
+joint processing of both text and image modalities, thereby avoiding
+the information loss that can occur when relying on intermediate
+image captions or descriptions.
+The prompt template designed for this narrative extraction task
+is as follows:
+
+
+
+===== PAGE 12 =====
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+Prompt for Multimodal Narrative Distillation
+SYSTEM PROMPT
+• Persona: You are an expert AI assistant specializing in
+media analysis and misinformation detection.
+• Core Task: Your task is to analyze multimodal news con-
+tent (text and image) and distill its core abstract narrative
+or central claim into a single, concise sentence.
+• Constraints:
+– Focus strictly on the underlying message, not superfi-
+cial details.
+– Remain objective and neutral; do not judge the verac-
+ity of the claim.
+– The output MUST be a single sentence.
+– Your response must contain ONLY the narrative sen-
+tence, with no preamble, explanations.
+USER PROMPT
+Example 1:
+• Text: "Explosive footage! A poll worker in XX County was
+caught on a hidden camera shredding pro-government
+ballots to rig the election. The proof is undeniable!"
+• Image: [Multimodal Input: A blurry image of a
+person standing near paper bins.]
+Core Narrative: Election fraud has been proven beyond
+doubt.
+Example 2:
+• Text: "Data never lies! This 90-degree voting curve is sta-
+tistically impossible unless there is some algorithm at work
+to cheat!"
+• Image: [Multimodal
+Input:
+A
+line
+graph
+of
+vote counts showing a sudden, sharp vertical
+spike.]
+Core Narrative: Election fraud has been proven beyond
+doubt.
+Final Query:
+• Text: {text_content}
+• Image: [Multimodal Input: News image.]
+Core Narrative:
+For each sample in our datasets, we construct a multimodal
+prompt where the model is presented with both the original news
+text and its associated image. During the generation process, we
+set the decoding temperature to 0.7 to strike a balance between
+creativity and factual consistency in the generated summaries.
+The objective of this pre-processing step is to distill the raw,
+diverse multimodal content into a focused and standardized textual
+narrative, which is crucial for the subsequent narrative embedding
+and retrieval stages. This process can be formally expressed as:
+A𝑢= Qwen3-MAX(P𝑢)
+(21)
+B
+Theoretical Analysis of Common
+Information Bottleneck Loss
+We posit that a robust representation for fake news detection should
+(𝑎) encapsulate the core, invariant narrative across related in-
+stances; (𝑏) preserve the unique, critical information of the specific
+instance; (𝑐) remain concise to prevent overfitting. We demonstrate
+that conventional objectives fail to satisfy these criteria simultane-
+ously, whereas our proposed Common Information Bottleneck Loss
+(CIBL) provides a principled framework to achieve this balance.
+Let h𝑢∈H be the representation of a news sample𝑢and h+
+𝑢∈H
+be its synthesized positive counterpart. The objective is to learn a
+latent representation z𝑢∈Z via an encoder 𝑞𝜙(z𝑢|h𝑢, h+
+𝑢).
+1. Limitations of Standard Contrastive Learning (CL). The stan-
+dard contrastive objective, such as InfoNCE, maximizes a variational
+lower bound on the mutual information (MI) between the encoded
+views:
+LCL ∝−𝐼(𝑓𝜃(h𝑢); 𝑓𝜃(h+
+𝑢))
+(22)
+where 𝑓𝜃is the encoder. Let the information content of the repre-
+sentations be decomposed as h𝑢≜𝐶∪𝑈and h+
+𝑢≜𝐶∪𝑈+, where
+𝐶is the common narrative and 𝑈,𝑈+ are unique components. The
+CL objective implicitly encourages the encoder to become invariant
+to non-common parts, leading to:
+𝑓𝜃(h𝑢) ≈𝑓𝜃(𝐶) =⇒𝐼(𝑓𝜃(h𝑢);𝑈) →0
+(23)
+This phenomenon, known as representation collapse, is detrimen-
+tal if the unique information 𝑈is predictive of the ground-truth
+veracity label 𝑦, i.e., if 𝐼(𝑦;𝑈|𝐶) > 0. The learned representation
+becomes suboptimal, as valuable information is discarded.
+2. Limitations of the Canonical Information Bottleneck (IB). The
+canonical IB principle [41] is formulated as:
+max
+z
+𝐼(z; y) −𝛽𝐼(z; x)
+(24)
+Adapting this to our self-supervised setting by setting x ≡h𝑢and
+y ≡h+
+𝑢, the objective becomes:
+max
+z𝑢𝐼(z𝑢; h+
+𝑢) −𝛽𝐼(z𝑢; h𝑢)
+(25)
+This formulation is inherently flawed.
+The compression term, −𝛽𝐼(z𝑢; h𝑢), penalizes any information
+retained from h𝑢, including the common information 𝐶which is es-
+sential for maximizing the predictive term 𝐼(z𝑢; h+
+𝑢). The objective
+creates a conflict rather than encouraging the desired disentangle-
+ment of common and unique information.
+3. The CIBL as a Variational Information-Theoretic Objective. CIBL
+resolves the aforementioned limitations by jointly optimizing three
+information-theoretic desiderata. The full objective is a variational
+upper bound on the following functional:
+F (𝜙,𝜓) = −𝜆1𝐼(z𝑢; h+
+𝑢)
+|         {z         }
+Alignment
++ (−𝜆2E𝑞𝜙[log𝑝𝜓(h𝑢|z𝑢)])
+|                           {z                           }
+Reconstruction
++ 𝜆3KL(𝑞𝜙(z𝑢|h𝑢, h+
+𝑢)∥𝑝(z))
+|                            {z                            }
+Compression
+(26)
+Each component of our loss, LCIBL = 𝜆1Lalign+𝜆2Lrecon+𝜆3Lcompress,
+corresponds to a bound on these terms.
+
+
+
+===== PAGE 13 =====
+Retrieval-Augmented Multimodal Model for Fake News Detection
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+• Alignment: Lalign is the InfoNCE loss, which maximizes a
+lower bound on MI [30, 35]:
+−Lalign ≤𝐼(z𝑢; h+
+𝑢)
+(27)
+This forces z𝑢to be maximally predictive of the common
+abstract narrative contained within h+
+𝑢.
+• Reconstruction: Lrecon is the negative log-likelihood of a
+decoder 𝑝𝜓.
+For a Gaussian decoder, 𝑝𝜓(h𝑢|z𝑢) = N (𝑔𝜓(z𝑢), 𝜎2𝐼), this
+reduces to the mean squared error ∥h𝑢−𝑔𝜓(z𝑢)∥2
+2. This term
+maximizes a lower bound on the MI required to reconstruct
+the original input:
+𝐼(z𝑢; h𝑢) ≥H (h𝑢) −Ez𝑢∼𝑞𝜙[−log𝑝𝜓(h𝑢|z𝑢)] = H (h𝑢) −Lrecon
+(28)
+where H (·) is the differential entropy. Minimizing Lrecon
+prevents the loss of unique, essential information from h𝑢,
+directly addressing the limitation of standard CL.
+• Compression: Lcompress is the Kullback-Leibler divergence
+between the posterior and a prior, which serves as a varia-
+tional upper bound on the MI between the latent code and
+the complete input pair:
+Lcompress = KL(𝑞𝜙(z𝑢|h𝑢, h+
+𝑢)∥𝑝(z)) ≥𝐼(z𝑢; h𝑢, h+
+𝑢)
+(29)
+This term regularizes the complexity of the learned repre-
+sentation z𝑢, promoting conciseness.
+4. Generalization Bound Perspective. The superiority of CIBL is
+further substantiated by learning theory. From a PAC-Bayesian
+standpoint, the generalization error Egen is bounded by the empiri-
+cal error Eemp plus a complexity term related to the KL divergence
+between the posterior and prior distributions over model param-
+eters [50]. This complexity term can be linked to the MI between
+the learned representation and the training data D𝑛:
+Egen ≤Eemp + O
+ √︂
+𝐼(z; D𝑛)
+𝑛
+!
+(30)
+Standard CL lacks explicit control over 𝐼(z; D𝑛), potentially leading
+to a loose bound and overfitting. In contrast, CIBL, through the
+Lcompress term, directly minimizes an upper bound of this MI. By
+jointly minimizing Lalign and Lrecon (to reduce Eemp) and Lcompress
+(to tighten the bound), CIBL learns a minimally sufficient represen-
+tation that is provably more likely to generalize well.
+In summary, CIBL provides a more comprehensive learning ob-
+jective that forces the model to disentangle and preserve informa-
+tion in a structured manner, directly yielding representations with
+a tighter information-theoretic generalization bound compared to
+conventional methods.

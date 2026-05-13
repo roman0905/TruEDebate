@@ -1,0 +1,2081 @@
+
+
+===== PAGE 1 =====
+ExDR: Explanation-driven Dynamic Retrieval Enhancement for
+Multimodal Fake News Detection
+Guoxuan Ding∗
+Institute of Information Engineering,
+Chinese Academy of Sciences
+China
+Yuqing Li∗
+Institute of Information Engineering,
+Chinese Academy of Sciences
+China
+Ziyan Zhou
+Institute of Information Engineering,
+Chinese Academy of Sciences
+China
+Zheng Lin†
+Institute of Information Engineering,
+Chinese Academy of Sciences
+China
+Daren Zha
+Institute of Information Engineering,
+Chinese Academy of Sciences
+China
+Jiangnan Li
+WeChat AI, Tencent
+China
+Abstract
+The rapid spread of multimodal fake news poses a serious soci-
+etal threat, as its evolving nature and reliance on timely factual
+details challenge existing detection methods. Dynamic Retrieval-
+Augmented Generation provides a promising solution by triggering
+keyword-based retrieval and incorporating external knowledge,
+thus enabling both efficient and accurate evidence selection. How-
+ever, it still faces challenges in addressing issues such as redundant
+retrieval, coarse similarity, and irrelevant evidence when applied to
+deceptive content. In this paper, we propose ExDR—an Explanation-
+driven Dynamic Retrieval-Augmented Generation framework for
+Multimodal Fake News Detection. Our framework systematically
+leverages model-generated explanations in both the retrieval trig-
+gering and evidence retrieval modules. It assesses triggering con-
+fidence from three complementary dimensions, constructs entity-
+aware indices by fusing deceptive entities, and retrieves contrastive
+evidence based on deception-specific features to challenge the initial
+claim and enhance the final prediction. Experiments on two bench-
+mark datasets, AMG and MR2, demonstrate that ExDR consistently
+outperforms previous methods in retrieval triggering accuracy, re-
+trieval quality, and overall detection performance, highlighting its
+effectiveness and generalization capability.
+CCS Concepts
+• Information systems →Multimedia information systems; • Com-
+puting methodologies →Natural language generation.
+Keywords
+Fake News Detection, Multimodel Analysis, Dynamic Retrival Method
+1
+Introduction
+The rapid spread of social media has dramatically accelerated the
+spread of fake news [24], especially in multimodal formats com-
+bining text and images. Compared to traditional text-based misin-
+formation, multimodal fake news leverages the stronger emotional
+appeal and vividness of visual content to achieve faster dissemina-
+tion and broader societal impact. Detecting multimodal fake news
+has thus emerged as a critical and urgent challenge in the field of
+information security.
+∗Equal Contribution. {dingguoxuan,liyuqing}@iie.ac.cn
+†Zheng Lin is the corresponding author.
+Recent Multimodal Fake News Detection (MFND) studies mainly
+rely on the combination of multiple language and vision models,
+designing complex and structured architectures to extract and align
+features from textual and visual modalities [8, 29], facing challenges
+in cross-modal feature fusion and requiring aligned multimodal
+training data. Large Vision-Language Models (LVLMs), with their
+unified image-text embedding space and rich world knowledge,
+demonstrate strong adaptability to multimodal tasks [18]. However,
+the reliance on internal memory accumulated during training re-
+duces its effectiveness in addressing newly emerging knowledge or
+long-tail instances, often resulting in hallucinations.
+Dynamic Retrieval-Augmented Generation (RAG) offers a promis-
+ing alternative by triggering keyword-based retrieval and incor-
+porating external information retrieval instead of over-relying on
+the model’s inherent reasoning capabilities [1, 20]. This contrasts
+with static RAG [15, 25, 33] pipelines that retrieve for every input
+regardless of necessity. With a decoupled retriever that can be up-
+dated independently of the model, dynamic RAG is well-suited for
+LVLMs to handle evolving knowledge and long-tail cases. How-
+ever, naive application of dynamic RAG introduces three key issues.
+First, for straightforward or commonsense-based fake news, LVLMs
+often already possess sufficient knowledge. Blindly triggering re-
+trieval without considering sample difficulty leads to unnecessary
+noise and computational overhead [12, 27]. Second, most existing
+retrieval strategies focus on sample-level similarity while neglect-
+ing finer-grained internal cues [20, 28], which are often critical for
+accurately identifying deceptive content. Finally, retrieved results
+tend to include only the most similar samples, which often lack
+deception-specific signals and may introduce useless or misleading
+evidence, ultimately impairing fake news detection accuracy [28].
+To address these challenges, we propose a novel framework
+named ExDR: Explanation-driven Dynamic Retrieval, specifically
+designed for Multimodal Fake News Detection. Our framework con-
+sists of two main modules: the retrieval triggering and the evidence
+retrieval, both of which leverage an explanation-driven RAG para-
+digm to better adapt to the requirements of MFND. ExDR places
+model-generated explanations at the center of the retrieval process
+and systematically investigates three key questions: when to trig-
+ger retrieval, how to construct effective retrieval queries, and what
+types of deceptive samples to retrieve. Each of these aspects targets
+a distinct challenge inherent in RAG-based methods, enabling more
+accurate and efficient detection of multimodal deception.
+arXiv:2601.15820v1  [cs.CL]  22 Jan 2026
+
+
+
+===== PAGE 2 =====
+Conference’17, July 2017, Washington, DC, USA
+Li et al.
+For retrieval triggering, we design a dynamic triggering strat-
+egy tailored for MFND. This strategy constructs three confidence di-
+mensions derived from the model-generated explanation, enabling
+a comprehensive assessment of whether retrieval is necessary for
+each prediction. To determine the optimal triggering thresholds
+for these indicators, we develop a two-stage hybrid search strategy
+that efficiently explores the threshold space. Notably, prior dynamic
+RAG methods typically iterate retrieval to refine the retrieval target,
+whereas we adopt a one-shot scheme: a single trigger decision fol-
+lowed by at most one retrieval step per instance, with the retrieved
+evidence directly used for the final prediction for efficiency.
+For evidence retrieval, we build an entity-enriched multimodal
+hybrid indexing strategy and perform contrastive evidence retrieval
+guided by model-generated explanations. This process integrates vi-
+sual, textual, and explanation-derived entity information into the in-
+dex, enabling more deception-relevant and semantically aligned re-
+trieval. Subsequently, based on the inferred fine-grained deception
+labels, we retrieve both positive and negative evidence to provide
+the model with more targeted guidance for model decision-making.
+To comprehensively evaluate dynamic retrieval strategies in our
+task, we further introduce two metrics: Retrieval Identification
+Rate, which measures the accuracy of recognizing when retrieval
+is needed, and Retrieval Efficiency, which quantifies the perfor-
+mance gains attributable to retrieval triggering.
+We conduct systematic evaluations of the proposed framework
+on two widely used MFND datasets, AMG and MR2. Experimental
+results demonstrate that our method significantly outperforms ex-
+isting approaches in retrieval triggering accuracy, retrieval quality,
+and final detection performance, highlighting its strong practicality
+and generalization capabilities.
+In summary, our main contributions are as follows:
+• We make the first attempt to apply the dynamic Retrieval-
+Augmented Generation framework to Multimodal Fake News
+Detection. Differing from prior supervised methods, our
+approach enables efficient detection without the need for
+task-specific training.
+• We propose ExDR, an explanation-driven framework that
+innovates on retrieval triggering and contrastive evidence
+retrieval, achieving more efficient and deception-targeted
+retrieval.
+• We design two new metrics to assess the accuracy and neces-
+sity of retrieval triggering. Extensive experiments on both in-
+domain and out-of-domain datasets demonstrate that ExDR
+achieves state-of-the-art detection performance, while our
+new metrics confirm its superiority in retrieval precision
+and necessity.
+2
+Related Work
+The goal of multimodal fake news detection is to identify incon-
+sistencies or deceptive content across modalities such as text and
+images. BMR [36] employ single-view prediction to disentangle
+multimodal features and explain which modality plays a critical
+role in the final decision. NSLM [8] leverages symbolic logic con-
+straints to unveil deceptive patterns within multimodal fake news.
+MMDFND [29] enhances multimodal feature representation by
+integrating additional vision and language models and applying
+feature-wise weighting strategies. FKA-Owl [18] encodes forgery-
+specific features as learnable continuous vectors and utilizes soft
+prompt tuning to strengthen the reasoning ability of LVLMs. Al-
+though these approaches improve the effectiveness of multimodal
+fake news detection, they remain limited by challenges in modality
+alignment and a strong reliance on high-quality deception-specific
+features. Retrieval-Augmented Generation (RAG) alleviates these
+issues by incorporating relevant information retrieved from ex-
+ternal corpora [4, 7, 14, 23, 30, 31]. More recently, dynamic RAG
+techniques further enhance this capability by adaptively deciding
+when to retrieve external evidence and what to retrieve during
+inference, thereby improving model performance and task accu-
+racy [2, 17, 26, 35]. Building upon this line of work, we introduce
+an improved dynamic RAG framework that enables accurate and
+efficient identification of deceptive cues, leading to more effective
+and efficient multimodal fake news detection.
+3
+Method
+In this section, we introduce ExDR, a retrieval-augmented frame-
+work for Multimodal Fake News Detection, as illustrated in Figure 1.
+ExDR consists of two core modules. The retrieval triggering module
+leverages confidence estimation derived from the model’s output to
+decide when retrieval is necessary. The evidence retrieval module
+fetches targeted supporting evidence using entity-enriched features
+and multi-granularity deception signals. Together, these modules
+jointly enhance retrieval efficiency and detection performance.
+3.1
+Preliminaries
+3.1.1
+Task Definition. A Multimodal Fake News Detection (MFND)
+dataset is defined as D = {(𝐼𝑖,𝑇𝑖,𝑦𝑖)}, where 𝐼𝑖represents an image,
+𝑇𝑖denotes the textual content, 𝑦𝑖∈{Real, Fake} is the binary label
+for the pair (𝐼𝑖,𝑇𝑖).
+3.1.2
+Data Preparation. We construct our retrieval corpus from the
+official training split of the AMG [9] dataset. This dataset provides
+not only binary labels but also fine-grained deception labels ˜𝑦𝑖for
+each fake news sample, as shown in Appendix A. To enrich this
+corpus with explicit reasoning, we leverage GPT-4o to generate a
+textual explanation 𝐸𝑖for each sample (𝐼𝑖,𝑇𝑖), justifying its corre-
+sponding label ˜𝑦𝑖. The final retrieval corpus is thus a collection of
+tuples 𝐷𝑐𝑜𝑟𝑝𝑢𝑠= {(𝐼𝑖,𝑇𝑖, 𝐸𝑖, ˜𝑦𝑖)}. The prompt used for explanation
+generation is shown in Figure 1, and the quality of the generated
+explanations is validated via human evaluation in Appendix B.
+Moreover, the AMG validation set Dval is used to determine the
+optimal configuration for retrieval triggering.
+3.1.3
+Response Formation. Unlike traditional Multimodal Fake
+News Detection methods that typically output only a classifica-
+tion label, we adopt a Chain-of-Thought [32] prompting format
+to generate both the answer and the reasoning process from the
+model. Specifically, the model’s response consists of two parts:
+1) Detection determines whether the input image–text pair is
+labeled as Real or Fake. 2) Explanation provides the rationale
+behind the detection decision.
+Each part serves as an independent retrieval trigger, and the
+final retrieval decision is made based on their joint signals. Detailed
+prompt used for response generation is provided in Appendix C.
+
+
+
+===== PAGE 3 =====
+ExDR: Explanation-driven Dynamic Retrieval Enhancement for Multimodal Fake News Detection
+Conference’17, July 2017, Washington, DC, USA
+text 
+image 
+label
+text 
+image 
+label
+explanation
+Trigger (·)
+Detection: The pair is fake because...
+When to Retrieve: Multi-Level Confidence Estimation
+Label Uncertainty (         )
+Predictive distribution
+fake
+false
+unmatched
+real
+Token Support (       )
+...
+Explanation: ... lacks clear evidence of a KKK ...
+t1
+Tokenizer
+t2
+tn-1
+tn
+...
+-1.26
+-0.17
+-1.29
+-0.86
+Sentence Confidence (          )
+...
+Two-Stage Hybrid Search Strategy
+Stage 1: Global Sampling
+Stage 2: Local Fine-Tuning
+Explanation NER
+content: Giant Donald
+Trump Balloon in KKK
+Robe Welcomes Melania
+to Phoenix Immigration
+Shelter.
+image:
+Organization: KKK;....
+Person: Melania, Trump.
+Response
+Text
+ 
+Image
+Entity
+Feature Construction
+How to Retrieve: Entity-enriched Multimodal Hybird Indexing
+Top-K Samples
+What to Retrieve:
+Multi-granularity Deceptive Evidence 
+Explanation
+Retrieving
+Retrieving
+ CLIP Encoder
+Top-K samples
+Fine-grained Labels
+0. Real News
+1. Image Fabrication
+2.Entity Inconsistency
+3. Event Inconsistency
+4. Time & Space Inconsistency
+5. Ineffective Visual Information
+Label voting
+Guiding sample selection
+...
+...
+label
+3
+Positive           Negative
+label
+0
+Step 0: Retrieval Coporus Construction
+Step 1: Retrieval Triggering
+Step 2: Evidence Retrieval
+text 
+image 
+LLM
+Prompt I
+Response 
+Trigger( )=0
+Trigger( )=1
+Evidence
+Retrieval
+LLM
+LLM
+Positive
+sample
+Negative
+sample
+Original response
+The pair is fake because the image lacks clear
+evidence of a KKK robe or Melania’s presence, .....
+Our response
+The pair is real because the
+image of a giant balloon
+depicting Donald Trump in a
+KKK robe aligns with the text
+discussing 
+the 
+balloon's
+presence 
+at 
+a 
+Phoenix
+immigration shelter.
+Trigger
+label
+3
+label
+0
+Prompt I: Lable-guided Explanation Generation
+Given the text <content> and the accompanying <image> , please
+provide a brief and concise explanation (within 1–2 sentences) of
+why this text-image pair fits the label <label>.
+Your response must follow this format exactly:
+The pair is <label> because {explanation of your reasoning}.
+Response
+ Detection +  Explanation 
+Step 3: Response Generation
+Figure 1: Overview of our proposed ExDR framework. ExDR consists of two main components: (1) a retrieval triggering module
+that dynamically determines whether retrieval is necessary based on response analysis, and (2) an evidence retrieval module
+that retrieves targeted evidence, including both positive and negative samples guided by fine-grained deception labels, to enrich
+the context and improve model generation.
+3.2
+When to Retrieve: Multi-Level Confidence
+Estimation
+Most dynamic RAG works, which are typically designed for gen-
+eration tasks such as QA, trigger retrieval based on next-token
+uncertainty [13, 27]. This token-centric approach is not optimal
+for classification, where the final prediction is a single label rather
+than a token sequence. To bridge this gap, we introduce a novel
+triggering mechanism that evaluates the model’s confidence based
+on its decision explanation. Specifically, we design a multi-level
+confidence evaluation method that integrates three complementary
+dimensions centered on the predicted label: Label-level Uncertainty,
+Token-level Support, and Sentence-level Confidence.
+3.2.1
+Label-level Uncertainty. Label-level Uncertainty serves as
+a fundamental and explicit indicator of the model’s certainty in
+assigning a predefined label. It provides a direct measure of the
+reliability of the classification decision. Formally, we define it as:
+𝜏label =
+
+log𝑝real −log𝑝fake
+log𝑝real + log𝑝fake
+,
+(1)
+where 𝑝real and 𝑝fake denote the generation probabilities for the
+Real and Fake labels, respectively, obtained from the model under
+the prompt-based classification setting.
+3.2.2
+Token-level Support. While explicit classification indicators
+such as Real and Fake provide valuable signals, they may not fully
+reflect the model’s decision-making process, particularly when the
+model exhibits overconfidence or when its predictions are influ-
+enced by localized biases. To obtain a more comprehensive under-
+standing of the model’s confidence, we analyze the distribution of
+the top-𝐾candidate tokens at the classification position.
+We evaluate each candidate token’s semantic alignment with
+the predicted label through hierarchical matching: direct lexical
+matching against curated lexicons Lreal and Lfake (e.g., “genuine",
+“false"), followed by semantic similarity matching for out-of-lexicons
+tokens. The token-level support score is then computed as:
+𝜏tok = 𝑁sup
+𝐾,
+(2)
+where 𝑁sup denotes the count of top-𝐾candidate tokens that se-
+mantically support the model’s current prediction. The detail of
+Lreal and Lfake, along with the alignment method, is provided in
+the Appendix D.
+3.2.3
+Sentence-level Confidence. In addition to token-level analy-
+sis, we compute the perplexity of the model-generated explanation
+as an indicator of the model’s reasoning-level confidence toward
+the predicted label. The sentence-level confidence is defined as:
+𝜏sent = exp
+ 
+1
+𝑛
+𝑛
+∑︁
+𝑖=1
+log 𝑃(𝑡𝑖)
+!
+,
+(3)
+where 𝑃(𝑡𝑖) denotes the generation probability of the 𝑖-th token in
+the explanation, and 𝑛is the total number of tokens.
+
+
+
+===== PAGE 4 =====
+Conference’17, July 2017, Washington, DC, USA
+Li et al.
+Centered on the predicted class label, these three indicators
+collectively evaluate the model’s output across multiple dimensions,
+including the label logit, the distribution of candidate tokens, and
+the coherence of the generated reasoning.
+3.2.4
+Confidence Threshold Optimization. After establishing the
+evaluation indicators, we determine thresholds for triggering re-
+trieval. Our goal is to improve MFND by selectively activating
+retrieval based on the three confidence scores. As the thresholds
+are continuous, exhaustive grid search is computationally prohibi-
+tive. We therefore adopt a two-stage hybrid strategy that balances
+global exploration and local exploitation.
+We first conduct a coarse-grained global exploration scan over
+the entire feasible threshold space T, where each dimension cor-
+responds to the empirical range of confidence scores observed on
+Dval. Specifically, given 𝑁𝑖𝑡𝑒𝑟sampling iterations, we perform
+Monte Carlo sampling to draw candidate threshold triplets:
+𝑇(𝑗) =
+
+𝜃(𝑗)
+label,𝜃(𝑗)
+tok,𝜃(𝑗)
+sent
+
+,
+𝑗= 1, 2, . . . , 𝑁𝑖𝑡𝑒𝑟.
+(4)
+For each combination 𝑇(𝑗), we define the retrieval triggering
+logic on Dval:
+Trigger(𝑗) (𝑥) = I
+
+𝜏label(𝑥) < 𝜃(𝑗)
+label ∧𝜏tok(𝑥) < 𝜃(𝑗)
+tok
+∧𝜏sent(𝑥) < 𝜃(𝑗)
+sent
+
+,
+(5)
+where I [·] is the indicator function.
+Once retrieval is triggered, the retrieved samples are incorpo-
+rated into the prompt as context, and the model generates a new
+prediction based on this augmented input.
+The performance of each combination is evaluated by:
+Score(𝑗) =
+∑︁
+(𝑥,𝑦)∈Dval
+I[ ˆ𝑦𝑇(𝑗) (𝑥) = 𝑦],
+(6)
+where ˆ𝑦𝑇(𝑥) denotes the final prediction, selected between the origi-
+nal and retrieval-augmented predictions according to the Trigger(𝑥).
+After the global exploration phase, we identify the top-𝐾triplets
+of threshold configurations that yield the best performance. These
+top-performing configurations serve as central points for subse-
+quent fine-grained local exploitation. For each of the 𝐾selected
+centers, we perform a localized grid search in their immediate neigh-
+borhood by perturbing each threshold dimension with a small step
+size 𝛿. The final optimal threshold configuration is selected as the
+one that achieves the highest accuracy on 𝐷𝑣𝑎𝑙across all candidates
+evaluated during both the global and local search stages:
+(𝜃∗
+label,𝜃∗
+tok,𝜃∗
+sent) = arg max
+𝑇
+Score(𝑇).
+(7)
+By combining global and local search, this approach ensures
+both efficient exploration and precise tuning, leading to a well-
+generalized threshold configuration, which is subsequently fixed
+and used for experiments.
+3.3
+How to Retrieve: Entity-enriched
+Multimodal Hybrid Indexing
+After retrieval is triggered, we construct an effective indexing strat-
+egy based on key entities derived from the news content. Prior
+multimodal approaches typically rely solely on image-text repre-
+sentations [19], which often contain noisy or irrelevant information
+and overlook entities that are critical for identifying deception. To
+address this limitation, we propose an explanation-guided entity-
+enriched multimodal hybrid indexing method. We extract key enti-
+ties from the model-generated explanation, as they tend to highlight
+potentially deceptive content. These entities are more likely to re-
+flect inconsistencies or fabrications, making them effective anchors
+for constructing semantically meaningful indexing representations.
+Specifically, we begin by employing a pre-trained Named En-
+tity Recognition (NER) model to extract a set of key entities E𝑡=
+{𝑒1, . . . ,𝑒𝑡, . . . } from the explanation 𝐸𝑡. These entities serve as
+potential deception indicators.
+Next, we leverage a frozen CLIP encoder to obtain three hybrid
+feature vectors: (1) the visual feature v𝑡extracted from the image, (2)
+the textual feature t𝑡derived from the original text, and (3) the entity
+feature e𝑡obtained by encoding a natural-language concatenation
+of the extracted entities. To integrate these modalities, we compute
+an averaged feature:
+f𝑡= v𝑡+ t𝑡+ e𝑡
+3
+,
+(8)
+where f𝑡jointly captures the visual context, the textual claim, and
+the explanation-guided entity information.
+The fused feature f𝑡is subsequently 𝐿2-normalized to yield the
+final entity-enriched indexing representation:
+ˆf𝑡=
+f𝑡
+∥f𝑡∥2
+.
+(9)
+By enriching image-text features with entity information, this
+entity-enriched indexing facilitates more targeted and semantically
+aligned retrieval for MFND.
+3.4
+What to Retrieve: Multi-Granularity
+Deceptive Evidence
+Standard evidence retrievals often retrieve broadly similar samples,
+overlooking the fine-grained, deception-specific evidence required
+to verify a claim. We address this through a two-step process: (1) in-
+fer a fine-grained deception label from the model’s explanation, and
+(2) use the inferred label to retrieve targeted contrastive examples.
+3.4.1
+Explanation-Guided Label Inference. We assign a fine-grained
+deception label ˆ𝑦𝑡to the model-generated explanation 𝐸𝑡. First, we
+compute the cosine similarity between 𝐸𝑡and explanations 𝐸𝑖in
+the corpus 𝐷corpus, retrieving the top-𝐾most similar explanations
+and their corresponding fine-grained labels ˜𝑦𝑖:
+𝑁𝑡= Top𝐾
+
+cos(𝐸𝑡, 𝐸𝑖) | 𝑖∈𝐷corpus
+	
+,
+(10)
+where 𝑁𝑡denotes the set of indices of the top-𝐾most similar ex-
+planations, and cos(·, ·) denotes the cosine similarity.
+Next, the infered fine-grained label ˆ𝑦𝑡is determined via a major-
+ity vote among the fine-grained labels ˜y of the retrieved candidates:
+ˆ𝑦𝑡= arg max
+𝑐∈˜y
+∑︁
+𝑖∈𝑁𝑡
+I( ˜𝑦𝑖= 𝑐).
+(11)
+3.4.2
+Contrastive Evidence Retrieval. With the entity-enriched fea-
+ture ˆf𝑡and the inferred fine-grained label ˆ𝑦𝑡, we retrieve informative
+contrastive evidence to support or refute the model’s prediction.
+To enable efficient similarity search, we build an FAISS index over
+
+
+
+===== PAGE 5 =====
+ExDR: Explanation-driven Dynamic Retrieval Enhancement for Multimodal Fake News Detection
+Conference’17, July 2017, Washington, DC, USA
+the fused features ˆf𝑖∈𝐷corpus, and adopt the dot product as the
+similarity metric. We retrieve two types of contrastive examples:
+a positive instance x+ whose fine-grained label matches ˆ𝑦𝑡, and a
+negative instance x−whose binary label differs from 𝑦𝑡:
+𝑠𝑖= ˆf𝑡· ˆf𝑖,
+(12)
+x+ = arg max
+𝑖: ˆ𝑦𝑡= ˜𝑦𝑖
+𝑠𝑖,
+(13)
+x−= arg max
+𝑖:𝑦𝑡≠𝑦𝑖,
+𝑠𝑖.
+(14)
+Finally, the two retrieved samples are prepended to the original
+input to form the full context [x+; x−; x]. This contrastive context
+exposes the model to both supporting and opposing instances, fa-
+cilitating a more informed decision under ambiguous or hard cases.
+Prompt details are shown in Appendix C.
+4
+Experiments
+4.1
+Datasets and Baselines
+4.1.1
+Datasets. We evaluate our method on two Multimodal Fake
+News Detection benchmarks: AMG [9] and MR2 [11], and conduct both
+in-domain and cross-domain evaluations according to the source of
+the retrieval corpus and the fine-tuning setting. For the in-domain
+setting, we conduct experiments on AMG, the first dataset designed
+for attributing multimodal fake news with multi-granularity, cov-
+ering five types of deception labels. It contains a total of 5,022
+samples, which are split into 3,532 for training, 517 for validation,
+and 973 for testing. Specifically, we use the training set Dtrain to
+construct the retrieval corpus Dcorpus. The validation set Dval is
+used for threshold selection, and the test set Dtest is used for final
+evaluation. For the cross-domain setting, we adopt MR2, a large-scale
+multimodal and multilingual rumor detection dataset composed
+of image–text pairs. The dataset contains 14,700 samples in both
+Chinese and English. In this setting, the retrieval corpus and the
+fine-tuned model trained on AMG are directly reused without further
+adaptation, thereby introducing a realistic cross-domain retrieval
+scenario. In our experiments, we only use the English subset for
+the test set Dtest, which consists of 3,295 samples, to evaluate the
+cross-dataset generalization ability of our method.
+4.1.2
+Baselines. To ensure a fair and comprehensive comparison,
+we implemented several RAG-based baselines under a unified ex-
+perimental setup. These baselines differ along two key components:
+the retrieval trigger and the evidence retrieval strategy.
+For the retrieval trigger module, we evaluate three strategies: (1)
+FL-RAG [22], which activates retrieval when the input sequence
+exceeds a predefined token length; (2) FLARE [13], which trig-
+gers retrieval when any generated token has a probability below a
+threshold; and (3) DRAGIN [27], which considers the importance
+and uncertainty of generated tokens based on attention weights.
+For the evidence retrieval module, we compare three standard
+methods: (1) wo-RAG, using the vanilla model without any re-
+trieval; (2) Text@full, employing BM25 to retrieve samples based
+on textual similarity; and (3) Image-Text@full [28], which com-
+putes retrieval scores using combined image-text features.
+To evaluate the overall performance on the MFND task, we
+conduct end-to-end experiments and compare several traditional
+MFND models, including MCAN [34], CAFE [5], BMR [37], CLIP [21],
+and MGCA [9], all trained on the same dataset for fair comparison.
+4.2
+Evaluation Metrics
+We propose two new metrics to measure the effectiveness of dy-
+namic trigger: Retrieval Identification Rate and Retrieval Efficiency.
+These metrics quantify (i) whether the model correctly identifies
+samples that require retrieval and (ii) whether retrieval leads to
+meaningful performance gains.
+Retrieval Identification Rate (RI) measures the proportion of
+triggered samples that were misclassified before retrieval, reflecting
+triggering accuracy:
+RI = 𝑁err-classified
+𝑁retri.
+,
+(15)
+where 𝑁retri. denotes the number of triggered samples, and 𝑁err-classified
+is the subset of those that were incorrectly classified prior to re-
+trieval. A higher RI indicates that the trigger more precisely identi-
+fies cases where retrieval is genuinely needed.
+Retrieval Efficiency (RE) evaluates the cost-benefit trade-off of
+the dynamic trigger. It measures how much of the potential accuracy
+gain from full retrieval is achieved, normalized by retrieval cost:
+RE = 𝑁dyn −𝑁no
+𝑁full −𝑁no
+×
+𝑁total
+𝑁retrieved
+,
+(16)
+where 𝑁dyn, 𝑁full, and 𝑁no are the counts of correct predictions with
+dynamic, full, and no retrieval, respectively. A higher RE indicates
+a more efficient strategy.
+In most cases, dynamic and full retrieval exhibit consistent per-
+formance trends relative to the no-retrieval baseline, with the re-
+sult that both tend to be either advantageous or disadvantageous.
+Accordingly, we report the standard RE value without additional
+symbols. However, in cases where one or both strategies under-
+perform compared to the no-retrieval baseline, i.e., 𝑁dyn < 𝑁no or
+𝑁full < 𝑁no, we use special annotations to highlight their relative
+performance: a ‘+’ signifies that dynamic retrieval is superior to
+full retrieval (𝑁dyn > 𝑁full), while a ‘−’ indicates the opposite.
+For evidence retrieval methods and end-to-end MFND experi-
+ments, we adopt Accuracy and F1 Score as standard metrics to
+evaluate the fundamental classification performance in the fake
+news detection task.
+4.3
+Experimental Settings
+We conduct experiments on Qwen2.5-VL-Instruct (7B, 32B) [3],
+InternVL2.5 (8B, 26B) [6], and LLaVA-1.6-Mistral (7B) [16]. For
+Named Entity Recognition model, we use bert-base-NER, and
+for image encoding, we use clip-vit-base-patch32. The hyper-
+parameter 𝐾is set to 10. During threshold search, we employ
+𝑁iter = 100 samples for global exploration and select the top 5
+for subsequent local refinement. For all retrieval triggering baseline
+models, we identify the optimal threshold on the validation set
+Dval and fix it for subsequent experiments. We adopt the LoRA
+technique [10] to construct fine-tuned models for comparison, us-
+ing the AMG training set Dtrain. We use a LoRA rank of 8, a batch
+size of 4, and a learning rate of 1e-4, and run for 5 epochs. The
+implementation is executed on 2 A800 GPUs with 80GB of memory.
+
+
+
+===== PAGE 6 =====
+Conference’17, July 2017, Washington, DC, USA
+Li et al.
+Table 1: Results of different retrieval triggering methods on the AMG and MR2 datasets. For each model, we report RI and RE
+scores for both the vanilla and fine-tuned versions. * indicates that no retrieval is triggered for that method.
+Methods
+Qwen-2.5-VL-7b
+InternVL2.5-8b
+LLaVA-1.6-Mistral-7b
+Qwen-2.5-VL-32b
+InternVL2.5-26b
+RI
+RE
+RI
+RE
+RI
+RE
+RI
+RE
+RI
+RE
+RI
+RE
+RI
+RE
+RI
+RE
+RI
+RE
+RI
+RE
+AMG (in-domain)
+FL-RAG
+41.5
+0.91
+16.7
+1.19
+41.6
+1.14
+18.0
+-0.36
+47.8
+1.85
+14.1
+0.00
+38.9
+0.70
+*
+*
+50.5
+3.75
+*
+*
+FLARE
+38.3
+1.34
+15.2
+-8.45
+39.4
+1.01
+*
+*
+49.9
+1.74
+*
+*
+30.8
+1.01
+18.6
+2.47
+32.6
+1.20
+*
+*
+DRAGIN
+36.1
+0.98
+*
+*
+39.5
+1.00
+16.6
+3.00
+49.7
+1.72
+12.4
+1.00
+31.0
+0.88
+14.5
+0.00
+29.8
+2.13
+11.7
+0.00
+ExDRtrigger
+38.8
+1.32
+50.0
+15.48
+43.8
+1.22
+60.0
+33.03
+64.3
+2.55
+66.7
++28.15
+30.1
+0.87
+52.1
+23.33
+37.0
+1.62
+58.5
+11.33
+MR2 (cross-domain)
+FL-RAG
+37.5
+1.79
+26.7
+0.87
+42.0
+1.07
+34.4
+22.50
+49.0
+1.39
+40.2
+1.32
+29.3
+2.17
+*
+*
+38.2
++4.35
+*
+*
+FLARE
+40.3
+3.46
+29.4
+0.00
+41.4
+1.02
+*
+*
+49.7
+1.25
+*
+*
+33.9
+1.78
+34.5
+2.42
+31.4
+2.39
+*
+*
+DRAGIN
+37.1
+1.01
+0.0
+0.00
+41.7
+1.02
+33.2
+12.60
+49.4
+1.25
+35.3
+0.98
+33.0
+1.00
+28.7
+1.29
+33.5
+0.67
+29.9
++1.03
+ExDRtrigger
+37.9
+2.14
+31.4
+-1.13
+42.9
+1.37
+53.4
+51.91
+57.6
+1.73
+68.7
+2.54
+34.7
+2.69
+36.8
+0.60
+29.9
+8.07
+48.5
++4.63
+Table 2: Results of different evidence retrieval methods on the AMG and MR2 datasets. We report Accuracy (ACC) and F1 scores
+for both the vanilla and fine-tuned versions. Both the @full and @dynamic settings utilize our proposed explanation-guided
+contrastive evidence retrieval, where @full applies it to every sample and @dynamic employs our retrieval trigger component.
+Methods
+Qwen-2.5-VL-7b
+InternVL2.5-8b
+LLaVA-1.6-Mistral-7b
+Qwen-2.5-VL-32b
+InternVL2.5-26b
+ACC
+F1
+ACC
+F1
+ACC
+F1
+ACC
+F1
+ACC
+F1
+ACC
+F1
+ACC
+F1
+ACC
+F1
+ACC
+F1
+ACC
+F1
+AMG (in-domain)
+wo-RAG
+63.5
+67.5
+84.2
+83.2
+60.4
+64.3
+84.5
+83.3
+59.1
+65.3
+85.9
+84.9
+69.0
+71.3
+86.0
+84.8
+66.8
+64.8
+85.3
+83.9
+Text@full
+61.8
+64.7
+84.8
+83.4
+52.4
+61.0
+84.5
+83.3
+65.9
+66.2
+85.5
+84.5
+65.1
+68.4
+86.4
+85.1
+58.0
+62.3
+85.0
+83.9
+Text+Image@full
+73.8
+71.6
+85.3
+82.8
+66.8
+64.4
+85.1
+82.5
+58.1
+55.0
+84.6
+83.7
+71.5
+71.5
+87.1
+85.0
+69.1
+63.4
+87.5
+85.8
+ExDRevidence
+-single@full
+70.4
+71.3
+85.4
+83.5
+71.2
+68.4
+85.5
+83.3
+71.5
+54.5
+84.7
+86.7
+73.5
+72.8
+83.7
+85.1
+69.3
+67.3
+86.1
+84.6
+-single@dynamic
+69.6
+70.8
+85.0
+83.7
+68.1
+66.7
+85.4
+83.9
+67.7
+69.7
+86.1
+85.1
+71.2
+72.2
+87.2
+85.7
+67.3
+65.2
+85.7
+84.3
+-pos+neg@full
+71.8
+70.4
+86.0
+83.8
+69.2
+66.2
+85.8
+83.5
+83.7
+67.7
+86.4
+85.2
+72.8
+72.9
+86.7
+84.7
+69.4
+64.9
+86.3
+84.6
+-pos+neg@dynamic
+70.6
+69.7
+85.1
+83.8
+68.8
+66.0
+86.7
+84.7
+75.9
+74.7
+85.9
+84.9
+70.8
+72.6
+86.9
+85.2
+67.7
+65.6
+85.7
+84.4
+MR2 (cross-domain)
+wo-RAG
+62.8
+57.7
+68.4
+60.3
+58.2
+55.5
+68.9
+65.0
+53.8
+55.7
+63.9
+65.4
+66.9
+57.8
+72.1
+62.2
+66.6
+54.8
+74.0
+68.2
+Text@full
+55.8
+51.8
+71.2
+60.3
+40.5
+50.9
+63.9
+61.8
+59.4
+54.6
+60.5
+63.9
+59.1
+56.9
+72.7
+63.0
+52.8
+52.7
+73.6
+66.8
+Text+Image@full
+66.3
+51.2
+73.2
+53.5
+57.8
+49.0
+73.2
+62.5
+63.9
+58.8
+65.3
+66.7
+69.5
+56.4
+73.9
+57.6
+67.3
+48.6
+75.1
+64.7
+ExDRevidence
+-single@full
+63.5
+57.6
+73.6
+57.4
+60.8
+50.6
+69.1
+60.5
+66.6
+42.3
+65.2
+66.1
+68.1
+55.0
+73.1
+59.3
+65.4
+52.1
+72.2
+64.5
+-single@dynamic
+63.9
+57.8
+68.3
+59.7
+61.0
+51.4
+70.3
+62.9
+62.3
+57.1
+64.7
+65.8
+68.4
+56.8
+72.2
+59.9
+65.7
+54.2
+74.4
+68.3
+-pos+neg@full
+67.6
+53.4
+73.1
+54.2
+59.2
+50.5
+72.2
+61.7
+72.0
+44.0
+68.6
+66.7
+68.6
+55.0
+73.1
+57.6
+67.1
+51.3
+73.4
+64.1
+-pos+neg@dynamic
+66.9
+53.3
+70.9
+60.7
+59.0
+50.4
+73.2
+64.2
+69.0
+57.6
+64.0
+65.5
+68.5
+57.1
+73.2
+60.5
+66.5
+54.8
+74.4
+68.1
+4.4
+Main Results
+We conducted experiments on the AMG and MR2 dataset, obtaining
+the following conclusions:
+(1) Multi-level confidence estimation enables more accurate
+and efficient retrieval triggering. As shown in Table 1, ExDRtrigger,
+which dynamically performs retrieval based on multi-level confi-
+dence, consistently outperforms baselines in both Retrieval Indica-
+tion (RI) and Retrieval Effectiveness (RE) metrics. This demonstrates
+its strong ability to decide when external evidence is necessary. The
+advantage is particularly pronounced on models like InternVL2.5-
+8B and LLaVA-1.6-Mistral-7B, where our trigger achieves signif-
+icantly better performance than competing methods. Moreover,
+on the fine-tuned InternVL2.5-26b model, both the fixed-length
+FL-RAG and the token-based FLARE methods fail to trigger any
+retrieval. In contrast, only the attention-weighted approach DRA-
+GIN and our ExDR𝑡𝑟𝑖𝑔𝑔𝑒𝑟successfully activate retrieval, with our
+method achieving overall superior performance. Furthermore, in
+the cross-domain evaluation on the MR2 dataset, our trigger module
+also demonstrates strong robustness.
+(2) Entity-enriched multimodal hybrid indexing provides more
+discriminative cues for evidence retrieval. When comparing
+single-sample retrieval methods, our entity-enriched indexing demon-
+strates a significant advantage over traditional multimodal indexing.
+As shown in Table 2, both ExDR𝑠𝑖𝑛𝑔𝑙𝑒@𝑓𝑢𝑙𝑙and Text+Image@full
+retrieve one evidence sample, yet our method often achieves sub-
+stantially better results. For instance, our ExDR𝑠𝑖𝑛𝑔𝑙𝑒@𝑓𝑢𝑙𝑙achieves
+71.5% accuracy on the AMG dataset with vanilla LLaVA-1.6-7B,
+substantially outperforming the Text+Image@full by 13.4%, despite
+both retrieving a single evidence sample. This advantage holds
+even in the challenging cross-domain MR2 evaluation, where our
+method achieves 66.6% accuracy against the baseline’s 63.9%. This
+consistent outperformance indicates that our explanation-guided
+entity indexing provides more discriminative cues than generic
+image-text embeddings, enabling the selection of more informative
+reference samples.
+
+
+
+===== PAGE 7 =====
+ExDR: Explanation-driven Dynamic Retrieval Enhancement for Multimodal Fake News Detection
+Conference’17, July 2017, Washington, DC, USA
+Table 3: Comparison results of Multimodal Fake News De-
+tection on the AMG dataset. ExDR represents the average
+performance across five fine-tuned LVLMs.
+MFND Method
+AMG
+ACC
+F1
+CLIP
+78.1
+78.1
+CAFE
+76.7
+76.3
+MCAN
+77.4
+76.9
+BMR
+80.8
+80.6
+MGCA
+83.2
+83.1
+ExDR
+86.1
+84.6
+Table 4: Ablations of core components in ExDR. Results are
+averaged over three untuned LVLMs: Qwen2.5-VL-7B, LLaVA-
+1.6-Mistral-7B, and InternVL2.5-8B.
+(a) Retrieval Trigger Component
+Method
+AMG
+MR2
+RI
+RE
+RI
+RE
+ExDRtrigger 49.0 1.70 46.1
+1.75
+w/o 𝜏label
+45.9
+1.46
+44.7
+1.06
+w/o 𝜏tok
+43.3
+1.36
+43.4
+1.82
+w/o 𝜏sent
+47.9
+1.61
+45.7
+1.20
+(b) Evidence Retrieval Component
+Method
+AMG
+MR2
+ACC
+F1
+ACC
+F1
+ExDRevidence
+74.9 68.1 66.3
+49.3
+w/o entity feat.
+74.2
+66.8
+65.0
+49.3
+w/o label det.
+71.0
+64.7
+63.6
+50.2
+w/o both
+66.5
+64.0
+64.1
+48.3
+(3) Contrastive evidence retrieval provides more informa-
+tive context than single-polarity matching. While our entity-
+enriched hybrid indexing already achieves strong performance with
+single-sample retrieval, employing positive-negative contrastive
+evidence based on fine-grained deception labels yields additional
+improvements across multiple settings. This enhancement is most
+pronounced on vanilla LLaVA-1.6-Mistral-7B, where using positive-
+negative retrieval elevates performance from 71.5% to 83.7%, achiev-
+ing the highest accuracy among all methods. Beyond in-domain
+performance, it also demonstrates particular value in cross-domain
+scenarios. For example, on MR2 evaluation with vanilla LLaVA-1.6,
+it achieves 72.0% accuracy compared to 66.6% for single retrieval,
+showcasing superior generalization capability. These results sug-
+gest that contrastive evidence enables the selection of meaningful
+contrasts, allowing models to distinguish inconsistencies.
+(4) ExDR demonstrates significant advantages over tradi-
+tional models on the MFND task. We evaluate the end-to-end
+performance of the task, as shown in Table 3. Experimental results
+indicate that our model consistently outperforms the baselines.
+Compared to the strong baseline MGCA, our model achieves im-
+provements of 2.9% in ACC and 1.5% in F1, demonstrating the
+effectiveness of our approach.
+4.5
+Ablation Study
+We conduct ablation studies to validate each component of our
+framework, with detailed results presented in Table 4. The analysis
+of our retrieval trigger in Table 4(a) shows that the full ExDR𝑡𝑟𝑖𝑔𝑔𝑒𝑟,
+with all three thresholds, achieves the best overall performance.
+Removing any single dimension degrades performance, with token-
+level support 𝜏tok having the greatest impact.
+For the evidence retrieval module, Table 4(b) shows that both the
+entity-enriched multimodal hybrid indexing and the label detection
+mechanism are critical. Disabling label detection (w/o label det.)
+causes the largest drop, highlighting the importance of label-voted
+contrastive retrieval. Likewise, removing entity features (w/o entity
+feat.) degrades performance, confirming the utility of entity-aware
+signals for more targeted retrieval. When both components are
+removed (w/o both), the performance drops further, demonstrating
+their complementary roles in enhancing retrieval quality.
+These ablation studies collectively validate the design choices
+in our ExDR, showing that each component makes a meaningful
+contribution to the overall performance.
+4.6
+Case Study
+Figure 2 presents three illustrative cases that demonstrate the key
+advantages of our ExDR framework. The first scenario, depicted in
+Figure 2a, involves a hard sample that the base model misclassifies.
+Our dynamic trigger correctly identifies this low confidence and
+initiates retrieval, which successfully corrects the prediction. In the
+second case (b), the base model correctly identifies a simple sample,
+but naive retrieval introduces noise, leading to a misclassification.
+In contrast, our trigger correctly refrains from retrieval, preserving
+the original correct prediction and enhancing efficiency. Finally,
+the third example (c) presents a complex case where both the base
+model and simple retrieval fail. Our ExDR combines an accurate
+trigger with explanation-guided retrieval, providing the targeted
+evidence required for a correct classification.
+4.7
+Quantitative Analysis
+We conduct a quantitative analysis by: (1) comparing different
+threshold search strategies to validate our two-stage approach; (2)
+varying the number of required confidence conditions to assess the
+benefit of combining three measures; and (3) analyzing the impor-
+tance of each confidence measure in the final triggering decisions.
+4.7.1
+Threshold Optimization Algorithm Analysis. We compare
+three threshold search strategies: Grid search, Bayesian search, and
+our proposed two-stage hybrid search. As shown in Table 5, we ob-
+serve that for models with smaller parameter sizes, Grid search and
+Bayesian search yield similar accuracy, while our hybrid approach
+with local optimization achieves significantly better performance.
+However, for larger models, the choice of threshold optimization
+strategy has less impact on performance, with all three methods
+producing comparable results. This suggests that larger models are
+less sensitive to threshold selection.
+4.7.2
+Number of Required Conditions Analysis. We examine the
+effect of varying the number of required threshold conditions in
+our two-stage hybrid search. Specifically, we test three settings:
+(1) 𝑛= 3: all three thresholds must be satisfied (our method);
+(2) 𝑛= 2: any two thresholds must be satisfied;
+(3) 𝑛= 1: only one threshold needs to be satisfied.
+As shown in Table 6, requiring more conditions consistently
+lowers the trigger ratio while maintaining, or even improving,
+recognition accuracy. This suggests that our confidence estimation
+can suppress unnecessary retrievals without hurting predictive
+
+
+
+===== PAGE 8 =====
+Conference’17, July 2017, Washington, DC, USA
+Li et al.
+Ground-truth: Real
+Unfortunately he has not been the first and he
+will not be the last,” his mother says.She says
+the point of the lawsuit is to inspire a policy
+change.“They could pay us $1. But if they change
+the policy, and we make these public, it will be
+totally worth it.
+Henry Kissinger, the engineer of the
+opening in U.S.-China relations, wielded
+his influence and unparalleled access
+over five decades
+Calista Flockhart believes Harrison
+Ford 'matured' and 'evolved' with
+each 'round' of kids
+(a)
+(b)
+(c)
+Ground-truth: Real
+single retrieve: Real
+The pair is fake because the
+text refers to Henry Kissinger, who is not the person depicted
+in the image. The image shows Warren Buffett, not Henry
+Kissinger.
+wo retrieve:Fake 
+ The pair is fake because the text
+refers to Henry Kissinger, who is not the person depicted in
+the image. The image shows Warren Buffett, not Henry
+Kissinger.
+Ground-truth: Fake
+ExDR(ours): Fake 
+(if trigger: no)
+Explanation:  The pair is fake because the text mentions
+Calista Flockhart and Harrison Ford, but the image does not
+feature either of these individuals. The person in the image is
+not recognizable as Calista Flockhart or Harrison Ford, and
+there is no  visual connection to the text's content.
+single retrieve: Real
+The pair is real because the
+image shows a woman standing outdoors, which is consistent
+with the type of photographs often used in news articles. The
+text references a statement about Harrison Ford, which could
+be a topic of a news article, and the image does not contradict
+this context.
+wo retrieve:Fake 
+The pair is fake because the
+image shows a woman standing outdoors in a park-like setting,
+and there is no indication that she is Calista Flockhart or that
+she is discussing Harrison Ford. The text refers to a specific
+topic and individual that is not represented in the image.
+ExDR(ours): Real 
+(if trigger: yes)
+Explanation:  The pair is real because the image shows two
+people standing in front of a wall with plaques, which aligns
+with the text discussing a lawsuit and policy change,
+suggesting a commemorative or memorial context.
+single retrieve: Fake 
+The pair is fake because the
+text discusses a lawsuit and policy change, while the image
+shows two people standing in front of a wall with plaques, which
+does not align with the context of a lawsuit or policy change.
+wo retrieve:Fake 
+ The pair is fake because the text
+and image do not match. The text refers to a lawsuit and a
+policy change, while the image shows two people standing in
+front of a wall with plaques, which does not relate to the
+context of a lawsuit or policy change. The image does not
+provide any visual cues that connect it to the text's content.
+ExDR(ours): Real 
+(if trigger: yes)
+Explanation:  The pair is real because the image depicts an
+elderly man in a formal setting, consistent with Kissinger's
+public appearances and roles. The text references Kissinger's
+influence in U.S.-China relations, which aligns with his
+historical involvement in diplomacy.
+Figure 2: Case study illustrating the effectiveness of ExDR across three representative scenarios.
+Table 5: Accuracy (%) of different threshold search strategies
+on the AMG and MR2 datasets. All results are obtained under
+the vanilla setting of LVLMs.
+Methods
+Qwen-2.5-VL
+InternVL2.5
+LLaVA-1.6
+7B
+32B
+8B
+26B
+7B
+AMG
+Grid Search
+66.2
+70.7
+70.5
+67.0
+68.4
+Bayesian
+66.7
+71.7
+71.0
+66.8
+67.8
+Hybrid (ours)
+70.6
+70.8
+68.8
+67.7
+75.9
+MR2
+Grid Search
+63.7
+68.0
+60.9
+65.9
+62.6
+Bayesian
+63.7
+68.1
+60.7
+66.5
+62.4
+Hybrid (ours)
+66.9
+68.5
+59.0
+66.5
+69.0
+Table 6: Analysis of threshold configurations for our two-
+stage hybrid search strategy across the AMG and MR2
+datasets, reporting accuracy (ACC) and retrieval trigger ratio
+for different numbers of thresholds (n).
+Methods
+Qwen-2.5-VL
+InternVL2.5
+LLaVA-1.6
+Qwen-2.5-VL
+InternVL2.5
+(7B)
+(8B)
+(7B)
+(32B)
+(26B)
+ACC
+ratio
+ACC
+ratio
+ACC
+ratio
+ACC
+ratio
+ACC
+ratio
+AMG
+n=1
+69.0
+67.4
+71.2
+99.7
+68.2
+33.4
+72.3
+40.7
+68.2
+39.0
+n=2
+67.0
+30.9
+71.0
+97.7
+68.1
+35.4
+72.4
+73.1
+67.3
+21.0
+n=3 (ours)
+70.6
+67.4
+68.8
+59.2
+75.9
+27.2
+70.8
+54.6
+67.7
+10.8
+MR2
+n=1
+63.9
+86.1
+60.8
+99.8
+62.4
+54.0
+67.8
+46.8
+66.8
+23.8
+n=2
+64.2
+76.2
+62.8
+99.7
+62.4
+53.7
+68.1
+20.7
+66.3
+8.9
+n=3 (ours)
+66.9
+75.8
+59.0
+77.5
+69.0
+38.8
+68.5
+45.8
+66.5
+9.5
+performance, supporting the design choice of enforcing all three
+confidence measures for optimal results.
+4.7.3
+Importance Analysis of Confidence Measures. We analyze
+which confidence measures contribute most to successful retrieval
+triggering. Using the 𝑛= 1 and 𝑛= 2 threshold condition, we
+examine the contribution of different threshold combinations to
+the final retrieval decisions. Figure 3 presents the results.
+For the vanilla models, as shown in Figures 3(a) and 3(b), all three
+thresholds play important roles, validating the necessity of using
+all three confidence measures. However, for fine-tuned models,
+depicted in Figures 3(c) and 3(d), supervised fine-tuning tends to
+homogenize token-level probability distributions, which diminishes
+_sent
+_sent+ _label
+_label
+_label+ _tok
+_tok
+_tok+ _sent
+20
+40
+60
+80
+QwenVL7b
+InternVL8b
+LLaVa7b
+QwenVL32b
+InternVL26b
+(a) AMG - Vanilla
+_sent
+_sent+ _label
+_label
+_label+ _tok
+_tok
+_tok+ _sent
+20
+40
+60
+80
+QwenVL7b
+InternVL8b
+LLaVa7b
+QwenVL32b
+InternVL26b
+(b) MR2 - Vanilla
+_sent
+_sent+ _label
+_label
+_label+ _tok
+_tok
+_tok+ _sent
+20
+40
+60
+80
+QwenVL7b
+InternVL8b
+LLaVa7b
+QwenVL32b
+InternVL26b
+(c) AMG - Fine-tuned
+_sent
+_sent+ _label
+_label
+_label+ _tok
+_tok
+_tok+ _sent
+20
+40
+60
+80
+QwenVL7b
+InternVL8b
+LLaVa7b
+QwenVL32b
+InternVL26b
+(d) MR2 - Fine-tuned
+Figure 3: Contribution analysis of different confidence mea-
+sures to retrieval triggering.
+the discriminative power of token-level signals. As a result, token-
+level support contributes minimally, indicating a reduced reliance
+on this particular confidence measure.
+5
+Conclusion
+In this paper, we propose ExDR, a novel Explanation-driven Dy-
+namic Retrieval framework specifically designed to address the
+unique challenges of multimodal fake news detection. Our frame-
+work focuses on three key aspects of retrieval augmentation: when
+to retrieve, how to retrieve, and what to retrieve. By introducing
+a dynamic triggering mechanism that evaluates the confidence of
+model-generated explanations and an evidence retrieval strategy
+driven by entity-enriched indexing and contrastive evidence, ExDR
+improves both the efficiency and precision of the retrieval process.
+Extensive experiments on the AMG and MR2 datasets demonstrate
+that our approach consistently outperforms existing methods in
+both fake news detection accuracy and retrieval effectiveness, high-
+lighting its strong potential for building more reliable and robust
+misinformation detection systems.
+
+
+
+===== PAGE 9 =====
+ExDR: Explanation-driven Dynamic Retrieval Enhancement for Multimodal Fake News Detection
+Conference’17, July 2017, Washington, DC, USA
+Table 7: Definitions of fine-grained deception labels and their explanations.
+Fine-grained Deception Label
+Explanation
+Real News
+The image and text are consistent and factually aligned, representing authentic news.
+Image Fabrication
+The image is likely manipulated or artificially generated. This includes advanced deepfake techniques, simple
+edits like splicing or Photoshopping, and fabricated visuals imitating official websites or social media posts.
+Entity Inconsistency
+The key entities (e.g., people, places, organizations) mentioned in the text do not match those depicted in the
+image, indicating a misalignment between modalities.
+Event Inconsistency
+Although the image and text refer to the same entities, they describe different events. The image may be
+genuine, but the text misrepresents or over-interprets its context.
+Time or Space Inconsistency
+The image or video is real but misrepresented in time or location—for example, showing past or distant events
+as if they were current or local.
+Ineffective Visual Information
+The image provides no evidential support for the accompanying text. It typically consists of text-only visuals
+or irrelevant content, lacking concrete proof such as on-site or event-related imagery.
+A
+Fine-grained Deception Labels
+In addition to the binary labels Real and Fake, the AMG dataset fur-
+ther annotates each fake news sample with a fine-grained deception
+label. Specifically, the fine-grained labels include Image Fabrication,
+Entity Inconsistency, Event Inconsistency, and Time or Space Incon-
+sistency. The extended deception labels ˜𝑦𝑖and their corresponding
+explanations are presented in Table 7.
+B
+Human Evaluation of LLM Explanations
+We conduct a human evaluation of LLM-generated explanations.
+Three annotators independently assess 50 randomly sampled in-
+stances, given the multimodal input, its label, and the explanation
+generated by GPT-4o. They rate (0/1/2): (i) Label–Explanation
+Consistency (Consis.), whether the explanation supports the la-
+bel; (ii) Multimodal Faithfulness (MM-Faith.), whether it is
+grounded in the image and text without hallucinated entities or
+unsupported claims; and (iii) Evidence Usefulness (Useful.),
+whether it provides specific, actionable clues rather than generic
+statements. We report mean scores and inter-annotator agreement
+(Fleiss’ 𝜅) with majority-vote aggregation. We observe substan-
+tial agreement (𝜅=0.58), and the averaged scores are Consis.=1.94,
+MM-Faith.=1.75, and Useful.=1.89. These results suggest the ex-
+planations are generally reliable and useful for retrieval.
+C
+Prompt Templates
+For the final prediction, we adopt two prompting strategies corre-
+sponding to the two modes. Prompt II is used in the non-retrieval
+setting, i.e., for baselines without retrieval or when the dynamic
+trigger deems external evidence unnecessary. When retrieval is ac-
+tivated, we use Prompt III, which prepends the retrieved positive
+(x+) and negative (x−) instances as few-shot in-context examples
+to guide a more informed and robust classification.
+D
+Details for Token-Level Support Calculation
+The token-level support score, 𝜏tok, quantifies the semantic align-
+ment of the top-𝐾candidate tokens with the model’s predicted
+label. This is determined via a hierarchical matching process.
+Step 1: Lexical Matching. We compare each candidate token 𝑡𝑖
+against two predefined label-related lexicons:
+• Lreal: {real, genuine, authentic, true, legitimate,
+realistic, legit, fact, accurate, related, likely,
+consistent, plausible}
+• Lfake: {fake, missing, false, fabric, fict, un, mis,
+fraud, unrelated, fictional, inconsistent}
+If a candidate token𝑡𝑖exactly matches any entry in either lexicon,
+it is directly assigned the corresponding label (Real or Fake).
+Step 2: Semantic Similarity Voting. If 𝑡𝑖is not found in either
+lexicon, we assess its alignment via semantic similarity. The token
+is inserted into a prompt template to form a query sentence: “This
+post is 𝑡𝑖.” and embedded using the all-MiniLM-L6-v2 sentence
+encoder. It is then compared with reference sentence embeddings
+constructed from each lexicon:
+• Real references: “The post is {word} and factually correct.” for each
+word in Lreal
+• Fake references: “The post is {word} and contains misinformation.”
+for each word in Lfake
+We compute the mean cosine similarity between the query em-
+bedding and each reference group:
+simreal(𝑡𝑖) =
+1
+|Lreal|
+∑︁
+𝑤∈Lreal
+cos(equery, ereal,𝑤)
+(17)
+simfake(𝑡𝑖) =
+1
+|Lfake|
+∑︁
+𝑤∈Lfake
+cos(equery, efake,𝑤)
+(18)
+where equery denotes the embedding of the query, ereal,𝑤and efake,𝑤
+denote the embeddings of the reference token 𝑤in the real and
+fake groups, respectively, and cos(·, ·) denotes cosine similarity.
+The token is assigned the label with the higher similarity. This
+enables generalization to unseen but semantically aligned tokens.
+Step 3: Score Computation. The final token-level support score
+is defined as the proportion of top-𝐾tokens whose assigned label
+matches the model’s predicted label 𝑦:
+𝜏tok = 𝑁sup
+𝐾,
+(19)
+where 𝑁sup is the number of supporting tokens that agree with 𝑦
+in either the lexical or semantic stage.
+
+
+
+===== PAGE 10 =====
+Conference’17, July 2017, Washington, DC, USA
+Li et al.
+Prompt II: Fake News Detection without Retrieval
+You are a knowledgeable and analytical fact-checking assistant. Your
+task is to determine whether a social text-image pair is fake.
+Your response should be either The
+pair
+is
+fake
+because
+{explanation of your reasoning}. if the text and image present
+false, misleading, or manipulated content, or The
+pair
+is
+real
+because {explanation of your reasoning}. if the text and image
+are consistent and factually aligned.
+Your explanation must be concise and clear, highlighting linguistic,
+visual, or contextual cues that support your conclusion.
+USER: the image <image> and the text <content >.
+ASSISTANT:
+Prompt III: Fake News Detection with Retrieval
+You are a knowledgeable and analytical fact-checking assistant. Your
+task is to determine whether a social text-image pair is fake.
+Your response should be either The
+pair
+is
+fake
+because
+{explanation of your reasoning}. if the text and image present
+false, misleading, or manipulated content, or The
+pair
+is
+real
+because {explanation of your reasoning}. if the text and image
+are consistent and factually aligned.
+Your explanation should be concise and clear, highlighting any linguistic,
+visual, or contextual cues that support your conclusion.
+Refer to these examples:
+USER: the first image <positive_image> and the text <positive_content>.
+ASSISTANT: The pair is real because {positive_explanation}
+USER: the second image <negative_image> and the text <nega-
+tive_content>.
+ASSISTANT: The pair is fake because {negative_explanation}
+Now determine the following:
+USER: the third image [image] and the text [content].
+ASSISTANT:
+References
+[1] Mohammad Mahdi Abootorabi, Amirhosein Zobeiri, Mahdi Dehghani, Moham-
+madali Mohammadkhani, Bardia Mohammadi, Omid Ghahroodi, Mahdieh Soley-
+mani Baghshah, and Ehsaneddin Asgari. 2025. Ask in any modality: A compre-
+hensive survey on multimodal retrieval-augmented generation. arXiv preprint
+arXiv:2502.08826 (2025).
+[2] Ingeol Baek, Hwan Chang, Byeongjeong Kim, Jimin Lee, and Hwanhee Lee. 2024.
+Probing-RAG: Self-Probing to Guide Language Models in Selective Document
+Retrieval. arXiv preprint arXiv:2410.13339 (2024).
+[3] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, Sibo Song, Kai
+Dang, Peng Wang, Shijie Wang, Jun Tang, et al. 2025. Qwen2. 5-vl technical
+report. arXiv preprint arXiv:2502.13923 (2025).
+[4] Sebastian Borgeaud, Arthur Mensch, Jordan Hoffmann, Trevor Cai, Eliza Ruther-
+ford, Katie Millican, George Bm Van Den Driessche, Jean-Baptiste Lespiau, Bog-
+dan Damoc, Aidan Clark, et al. 2022. Improving language models by retrieving
+from trillions of tokens. In International conference on machine learning. PMLR,
+2206–2240.
+[5] Yixuan Chen, Dongsheng Li, Peng Zhang, Jie Sui, Qin Lv, Lu Tun, and Li Shang.
+2022. Cross-modal ambiguity learning for multimodal fake news detection. In
+Proceedings of the ACM Web Conference 2022. 2897–2905.
+[6] Zhe Chen, Weiyun Wang, Yue Cao, Yangzhou Liu, Zhangwei Gao, Erfei Cui,
+Jinguo Zhu, Shenglong Ye, Hao Tian, Zhaoyang Liu, et al. 2024. Expanding
+performance boundaries of open-source multimodal models with model, data,
+and test-time scaling. arXiv preprint arXiv:2412.05271 (2024).
+[7] Qian Dong, Qingyao Ai, Hongning Wang, Yiding Liu, Haitao Li, Weihang Su,
+Yiqun Liu, Tat-Seng Chua, and Shaoping Ma. 2025. Decoupling Knowledge and
+Context: An Efficient and Effective Retrieval Augmented Generation Framework
+via Cross Attention. In Proceedings of the ACM on Web Conference 2025.
+[8] Yiqi Dong, Dongxiao He, Xiaobao Wang, Youzhu Jin, Meng Ge, Carl Yang, and
+Di Jin. 2024. Unveiling implicit deceptive patterns in multi-modal fake news
+via neuro-symbolic reasoning. In Proceedings of the AAAI conference on artificial
+intelligence, Vol. 38. 8354–8362.
+[9] Hao Guo, Zihan Ma, Zhi Zeng, Minnan Luo, Weixin Zeng, Jiuyang Tang, and
+Xiang Zhao. 2025. Each fake news is fake in its own way: An attribution multi-
+granularity benchmark for multimodal fake news detection. In Proceedings of the
+AAAI Conference on Artificial Intelligence, Vol. 39. 228–236.
+[10] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+Wang, Lu Wang, Weizhu Chen, et al. 2022. Lora: Low-rank adaptation of large
+language models. ICLR 1, 2 (2022), 3.
+[11] Xuming Hu, Zhijiang Guo, Junzhe Chen, Lijie Wen, and Philip S Yu. 2023. Mr2: A
+benchmark for multimodal retrieval-augmented rumor detection in social media.
+In Proceedings of the 46th international ACM SIGIR conference on research and
+development in information retrieval. 2901–2912.
+[12] Soyeong Jeong, Jinheon Baek, Sukmin Cho, Sung Ju Hwang, and Jong C Park.
+2024. Adaptive-RAG: Learning to Adapt Retrieval-Augmented Large Language
+Models through Question Complexity. In Proceedings of the 2024 Conference of the
+North American Chapter of the Association for Computational Linguistics: Human
+Language Technologies (Volume 1: Long Papers). 7029–7043.
+[13] Zhengbao Jiang, Frank F Xu, Luyu Gao, Zhiqing Sun, Qian Liu, Jane Dwivedi-Yu,
+Yiming Yang, Jamie Callan, and Graham Neubig. 2023. Active retrieval augmented
+generation. In Proceedings of the 2023 Conference on Empirical Methods in Natural
+Language Processing. 7969–7992.
+[14] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin,
+Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel,
+et al. 2020. Retrieval-augmented generation for knowledge-intensive nlp tasks.
+Advances in Neural Information Processing Systems 33 (2020), 9459–9474.
+[15] Yuqing Li, Jiangnan Li, Zheng Lin, Ziyan Zhou, Junjie Wu, Weiping Wang, Jie
+Zhou, and Mo Yu. 2025. Mindscape-Aware Retrieval Augmented Generation
+for Improved Long Context Understanding. arXiv:2512.17220 [cs.CL] https:
+//arxiv.org/abs/2512.17220
+[16] Haotian Liu, Chunyuan Li, Yuheng Li, Bo Li, Yuanhan Zhang, Sheng Shen, and
+Yong Jae Lee. 2024. Llavanext: Improved reasoning, ocr, and world knowledge.
+[17] Huanshuo Liu, Hao Zhang, Zhijiang Guo, Kuicai Dong, Xiangyang Li, Yi Quan
+Lee, Cong Zhang, and Yong Liu. 2024. CtrlA: Adaptive Retrieval-Augmented
+Generation via Probe-Guided Control. arXiv preprint arXiv:2405.18727 (2024).
+[18] Xuannan Liu, Peipei Li, Huaibo Huang, Zekun Li, Xing Cui, Jiahao Liang, Lixiong
+Qin, Weihong Deng, and Zhaofeng He. 2024. Fka-owl: Advancing multimodal
+fake news detection through knowledge-augmented lvlms. In Proceedings of the
+32nd ACM International Conference on Multimedia. 10154–10163.
+[19] Jingbiao Mei, Jinghong Chen, Weizhe Lin, Bill Byrne, and Marcus Tomalin. 2024.
+Improving Hateful Meme Detection through Retrieval-Guided Contrastive Learn-
+ing. In Proceedings of the 62nd Annual Meeting of the Association for Computa-
+tional Linguistics (Volume 1: Long Papers), Lun-Wei Ku, Andre Martins, and Vivek
+Srikumar (Eds.). Association for Computational Linguistics, Bangkok, Thailand,
+5333–5347. doi:10.18653/v1/2024.acl-long.291
+[20] Lang Mei, Siyu Mo, Zhihan Yang, and Chong Chen. 2025. A survey of multimodal
+retrieval-augmented generation. arXiv preprint arXiv:2504.08748 (2025).
+[21] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh,
+Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark,
+et al. 2021. Learning transferable visual models from natural language supervision.
+In International conference on machine learning. PMLR, 8748–8763.
+[22] Ori Ram, Yoav Levine, Itay Dalmedigos, Dor Muhlgay, Amnon Shashua, Kevin
+Leyton-Brown, and Yoav Shoham. 2023. In-Context Retrieval-Augmented Lan-
+guage Models. Transactions of the Association for Computational Linguistics 11
+(2023), 1316–1331.
+[23] Weijia Shi, Sewon Min, Michihiro Yasunaga, Minjoon Seo, Rich James, Mike
+Lewis, Luke Zettlemoyer, and Wen-tau Yih. 2023. Replug: Retrieval-augmented
+black-box language models. arXiv preprint arXiv:2301.12652 (2023).
+[24] Kai Shu, Amy Sliva, Suhang Wang, Jiliang Tang, and Huan Liu. 2017. Fake news
+detection on social media: A data mining perspective. ACM SIGKDD explorations
+newsletter 19, 1 (2017), 22–36.
+[25] Jiwoong Sohn, Yein Park, Chanwoong Yoon, Sihyeon Park, Hyeon Hwang, Mu-
+jeen Sung, Hyunjae Kim, and Jaewoo Kang. 2025. Rationale-guided retrieval
+augmented generation for medical question answering. In Proceedings of the 2025
+Conference of the Nations of the Americas Chapter of the Association for Com-
+putational Linguistics: Human Language Technologies (Volume 1: Long Papers).
+12739–12753.
+[26] Weihang Su, Yichen Tang, Qingyao Ai, Changyue Wang, Zhijing Wu, and Yiqun
+Liu. 2024. Mitigating entity-level hallucination in large language models. In
+Proceedings of the 2024 Annual International ACM SIGIR Conference on Research
+and Development in Information Retrieval in the Asia Pacific Region. 23–31.
+[27] Weihang Su, Yichen Tang, Qingyao Ai, Zhijing Wu, and Yiqun Liu. 2024. DRA-
+GIN: Dynamic Retrieval Augmented Generation based on the Information Needs
+of Large Language Models. In 62nd Annual Meeting of the Association for Compu-
+tational Linguistics, ACL 2024. Association for Computational Linguistics (ACL),
+12991–13013.
+
+
+
+===== PAGE 11 =====
+ExDR: Explanation-driven Dynamic Retrieval Enhancement for Multimodal Fake News Detection
+Conference’17, July 2017, Washington, DC, USA
+[28] Binghao Tang, Boda Lin, Haolong Yan, and Si Li. 2024. Leveraging generative
+large language models with visual instruction and demonstration retrieval for
+multimodal sarcasm detection. In Proceedings of the 2024 Conference of the North
+American Chapter of the Association for Computational Linguistics: Human Lan-
+guage Technologies (Volume 1: Long Papers). 1732–1742.
+[29] Yu Tong, Weihai Lu, Zhe Zhao, Song Lai, and Tong Shi. 2024. MMDFND: Multi-
+modal multi-domain fake news detection. In Proceedings of the 32nd ACM Inter-
+national Conference on Multimedia. 1178–1186.
+[30] Changyue Wang, Weihang Su, Qingyao Ai, and Yiqun Liu. 2024. Knowledge
+Editing through Chain-of-Thought. arXiv preprint arXiv:2412.17727 (2024).
+[31] Changyue Wang, Weihang Su, Hu Yiran, Qingyao Ai, Yueyue Wu, Cheng Luo,
+Yiqun Liu, Min Zhang, and Shaoping Ma. 2024. LeKUBE: A Legal Knowledge
+Update BEnchmark. arXiv preprint arXiv:2407.14192 (2024).
+[32] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi,
+Quoc V Le, Denny Zhou, et al. 2022. Chain-of-thought prompting elicits reasoning
+in large language models. Advances in neural information processing systems 35
+(2022), 24824–24837.
+[33] Junjie Wu, Jiangnan Li, Yuqing Li, Lemao Liu, Liyan Xu, Jiwei Li, Dit-Yan
+Yeung, Jie Zhou, and Mo Yu. 2025.
+SitEmb-v1.5: Improved Context-Aware
+Dense Retrieval for Semantic Association and Long Story Comprehension.
+arXiv:2508.01959 [cs.CL] https://arxiv.org/abs/2508.01959
+[34] Yang Wu, Pengwei Zhan, Yunjian Zhang, Liming Wang, and Zhen Xu. 2021. Mul-
+timodal Fusion with Co-Attention Networks for Fake News Detection. In Findings
+of the Association for Computational Linguistics: ACL-IJCNLP 2021, Chengqing
+Zong, Fei Xia, Wenjie Li, and Roberto Navigli (Eds.). Association for Computa-
+tional Linguistics, Online, 2560–2569. doi:10.18653/v1/2021.findings-acl.226
+[35] Zijun Yao, Weijian Qi, Liangming Pan, Shulin Cao, Linmei Hu, Weichuan Liu,
+Lei Hou, and Juanzi Li. 2024. Seakr: Self-aware knowledge retrieval for adaptive
+retrieval augmented generation. arXiv preprint arXiv:2406.19215 (2024).
+[36] Qichao Ying, Xiaoxiao Hu, Yangming Zhou, Zhenxing Qian, Dan Zeng, and
+Shiming Ge. 2023. Bootstrapping multi-view representations for fake news
+detection. In Proceedings of the AAAI conference on Artificial Intelligence, Vol. 37.
+5384–5392.
+[37] Qichao Ying, Xiaoxiao Hu, Yangming Zhou, Zhenxing Qian, Dan Zeng, and
+Shiming Ge. 2023. Bootstrapping multi-view representations for fake news
+detection. In Proceedings of the AAAI conference on Artificial Intelligence, Vol. 37.
+5384–5392.
