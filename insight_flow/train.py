@@ -115,24 +115,27 @@ def supcon_loss(
     if B < 2:
         return features.new_zeros(())
 
-    feats = F.normalize(features.float(), dim=-1)
-    sim = feats @ feats.T / temperature                       # [B, B]
+    # V7 修复：AMP autocast 下 fp16 的 -1e9 会 overflow，强制在 fp32 下计算。
+    device_type = features.device.type
+    with torch.amp.autocast(device_type, enabled=False):
+        feats = F.normalize(features.float(), dim=-1)
+        sim = feats @ feats.T / float(temperature)            # [B, B] fp32
 
-    eye = torch.eye(B, device=features.device, dtype=torch.bool)
-    sim = sim.masked_fill(eye, -1e9)
+        eye = torch.eye(B, device=features.device, dtype=torch.bool)
+        sim = sim.masked_fill(eye, -1e9)
 
-    pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1)) & ~eye
+        pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1)) & ~eye
 
-    if not pos_mask.any():
-        return features.new_zeros(())
+        if not pos_mask.any():
+            return features.new_zeros(())
 
-    log_prob = sim - torch.logsumexp(sim, dim=-1, keepdim=True)
-    pos_count = pos_mask.float().sum(-1).clamp_min(1.0)
-    mean_log_prob_pos = (pos_mask.float() * log_prob).sum(-1) / pos_count
+        log_prob = sim - torch.logsumexp(sim, dim=-1, keepdim=True)
+        pos_count = pos_mask.float().sum(-1).clamp_min(1.0)
+        mean_log_prob_pos = (pos_mask.float() * log_prob).sum(-1) / pos_count
 
-    valid = (pos_mask.sum(-1) > 0).float()
-    denom = valid.sum().clamp_min(1.0)
-    loss = -(mean_log_prob_pos * valid).sum() / denom
+        valid = (pos_mask.sum(-1) > 0).float()
+        denom = valid.sum().clamp_min(1.0)
+        loss = -(mean_log_prob_pos * valid).sum() / denom
     return loss
 
 

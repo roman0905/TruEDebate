@@ -5,7 +5,8 @@
       "Bash(python -c \"import sys, json; d = json.load\\(sys.stdin\\); [print\\(f\\\\\"node{i}: role_id={n['role_id']}, role_name={n.get\\('role_name'\\)}, perspective_key={n.get\\('perspective_key'\\)}, text_len={len\\(n.get\\('text',''\\)\\)}\\\\\"\\) for i,n in enumerate\\(d['nodes']\\)]\")",
       "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py)",
       "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py main_ensemble.py)",
-      "Bash(python -m py_compile config.py insight_flow/networks.py)"
+      "Bash(python -m py_compile config.py insight_flow/networks.py)",
+      "Bash(python -m py_compile insight_flow/train.py)"
     ]
   }
 }
