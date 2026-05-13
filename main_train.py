@@ -152,6 +152,22 @@ def main():
         help="覆盖非 BERT 参数的 weight_decay"
     )
     parser.add_argument(
+        "--no_fnaca", action="store_true",
+        help="V7: 禁用 Fine-Grained News-Argument Co-Attention"
+    )
+    parser.add_argument(
+        "--no_sccg", action="store_true",
+        help="V7: 禁用 Self-Consistency Credibility Gating"
+    )
+    parser.add_argument(
+        "--no_scra", action="store_true",
+        help="V7: 禁用 Stance-Contrastive SupCon 损失"
+    )
+    parser.add_argument(
+        "--scra_weight", type=float, default=None,
+        help="V7: SupCon 损失权重"
+    )
+    parser.add_argument(
         "--no_typed_edges", action="store_true",
         help="禁用 edge_type 边类型嵌入，用于消融实验"
     )
@@ -199,6 +215,14 @@ def main():
         config.SWA_START_RATIO = args.swa_start_ratio
     if args.weight_decay_other is not None:
         config.WEIGHT_DECAY_OTHER = args.weight_decay_other
+    if args.no_fnaca:
+        config.USE_FNACA = False
+    if args.no_sccg:
+        config.USE_SCCG = False
+    if args.no_scra:
+        config.USE_SCRA = False
+    if args.scra_weight is not None:
+        config.SCRA_WEIGHT = args.scra_weight
 
     set_seed(args.seed)
 
@@ -301,6 +325,9 @@ def main():
     logger.info(f"  ClassWeight: mode={config.CLASS_WEIGHT_MODE}")
     logger.info(f"  WD other:    {config.WEIGHT_DECAY_OTHER}")
     logger.info(f"  Patience:    {config.EARLY_STOPPING_PATIENCE}")
+    logger.info(f"  FNACA:       {getattr(config, 'USE_FNACA', False)}")
+    logger.info(f"  SCCG:        {getattr(config, 'USE_SCCG', False)}")
+    logger.info(f"  SCRA:        {getattr(config, 'USE_SCRA', False)} (w={getattr(config, 'SCRA_WEIGHT', 0)})")
     logger.info("=" * 60)
 
     # 更新全局梯度累积配置

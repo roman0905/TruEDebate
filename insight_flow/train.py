@@ -92,6 +92,50 @@ class FocalLoss(nn.Module):
         return loss
 
 
+# ──────────────────────────────── V7 SupCon Loss (SCRA) ────────────────────────────────
+
+
+def supcon_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    temperature: float = 0.07,
+) -> torch.Tensor:
+    """Supervised Contrastive Loss (Khosla et al., 2020).
+
+    给定一批 graph-level 表示和它们的真假标签，强迫同标签样本聚拢、
+    异标签样本远离。修补 TED 漏洞 W5（BERT 不知立场）：让表示空间
+    具备 stance-discriminative 结构。
+
+    Args:
+        features: [B, D] 任意维度的样本级特征。
+        labels  : [B]   样本标签。
+        temperature: 温度系数。
+    """
+    B = features.shape[0]
+    if B < 2:
+        return features.new_zeros(())
+
+    feats = F.normalize(features.float(), dim=-1)
+    sim = feats @ feats.T / temperature                       # [B, B]
+
+    eye = torch.eye(B, device=features.device, dtype=torch.bool)
+    sim = sim.masked_fill(eye, -1e9)
+
+    pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1)) & ~eye
+
+    if not pos_mask.any():
+        return features.new_zeros(())
+
+    log_prob = sim - torch.logsumexp(sim, dim=-1, keepdim=True)
+    pos_count = pos_mask.float().sum(-1).clamp_min(1.0)
+    mean_log_prob_pos = (pos_mask.float() * log_prob).sum(-1) / pos_count
+
+    valid = (pos_mask.sum(-1) > 0).float()
+    denom = valid.sum().clamp_min(1.0)
+    loss = -(mean_log_prob_pos * valid).sum() / denom
+    return loss
+
+
 # ──────────────────────────────── EMA ────────────────────────────────
 
 
@@ -200,6 +244,8 @@ def train_one_epoch(
     mixup_alpha: float = config.MIXUP_ALPHA,
     mixup_prob: float = config.MIXUP_PROB,
     ema: ModelEMA | None = None,
+    supcon_weight: float = 0.0,
+    supcon_temperature: float = 0.07,
 ) -> float:
     model.train()
     total_loss = 0.0
@@ -207,6 +253,7 @@ def train_one_epoch(
     optimizer.zero_grad()
 
     use_aux = aux_loss_weight > 0 and getattr(model, "use_aux_loss", False)
+    use_supcon = supcon_weight > 0
     use_amp = scaler is not None
 
     for step, batch_data in enumerate(loader):
@@ -219,35 +266,38 @@ def train_one_epoch(
             if apply_mixup_now:
                 # Manifold Mixup：在分类器输入处混合两条样本的拼接特征。
                 logits, features = _call_model(model, fields, return_features=True)
-                # 同时计算正常的 aux 损失（无 mixup），保留视角监督。
                 main_loss = criterion(logits, labels)
-                if use_aux:
-                    # 取 aux 信号，需要额外把 features 解构得到 dense_nodes；
-                    # 简化处理：mixup 批次只用主损失 + mixed loss，不再附加 aux。
-                    pass
-                # 生成 mixup 排列
                 perm = torch.randperm(features.size(0), device=features.device)
                 lam = float(np.random.beta(mixup_alpha, mixup_alpha))
                 mixed = lam * features + (1.0 - lam) * features[perm]
-                # 用同样的分类头计算混合后的 logits。
                 real_model = _underlying(model)
                 mixed_logits = real_model.classifier(mixed)
                 mixed_loss = (
                     lam * criterion(mixed_logits, labels)
                     + (1.0 - lam) * criterion(mixed_logits, labels[perm])
                 )
-                return 0.5 * main_loss + 0.5 * mixed_loss
-            # 非 mixup 路径：常规 + aux
-            if use_aux:
-                logits, aux_logits, aux_batch_ids = _call_model(
-                    model, fields, return_aux=True
+                total = 0.5 * main_loss + 0.5 * mixed_loss
+                if use_supcon and labels.size(0) >= 2:
+                    total = total + supcon_weight * supcon_loss(
+                        features, labels, supcon_temperature
+                    )
+                return total
+
+            # 非 mixup 路径：常规 + aux + (可选) SCRA SupCon
+            if use_aux or use_supcon:
+                logits, aux_logits, aux_batch_ids, features = _call_model(
+                    model, fields, return_aux=True, return_features=True
                 )
                 main_loss = criterion(logits, labels)
-                if aux_logits.numel() > 0:
+                total = main_loss
+                if use_aux and aux_logits.numel() > 0:
                     aux_labels = labels[aux_batch_ids]
-                    aux_loss = criterion(aux_logits, aux_labels)
-                    return main_loss + aux_loss_weight * aux_loss
-                return main_loss
+                    total = total + aux_loss_weight * criterion(aux_logits, aux_labels)
+                if use_supcon and labels.size(0) >= 2:
+                    total = total + supcon_weight * supcon_loss(
+                        features, labels, supcon_temperature
+                    )
+                return total
             logits = _call_model(model, fields)
             return criterion(logits, labels)
 
@@ -528,6 +578,8 @@ def train(
 
     aux_weight = config.AUX_LOSS_WEIGHT if getattr(model, "use_aux_loss", False) else 0.0
     use_mixup = config.USE_MIXUP
+    supcon_w = config.SCRA_WEIGHT if getattr(config, "USE_SCRA", False) else 0.0
+    supcon_t = getattr(config, "SCRA_TEMPERATURE", 0.07)
 
     logger.info(f"开始训练: {epochs} epochs, device={device}, AMP={use_amp}")
     logger.info(f"BERT 可训练参数: {sum(p.numel() for p in bert_params):,}")
@@ -551,6 +603,11 @@ def train(
         f"SWA: enabled={config.USE_SWA}, start_epoch={swa_start_epoch}"
     )
     logger.info(f"Threshold tuning: enabled={config.USE_THRESHOLD_TUNING}")
+    logger.info(
+        f"V7 modules: FNACA={getattr(config, 'USE_FNACA', False)}, "
+        f"SCCG={getattr(config, 'USE_SCCG', False)}, "
+        f"SCRA={getattr(config, 'USE_SCRA', False)} (w={supcon_w}, T={supcon_t})"
+    )
     logger.info(f"Grad clip max norm: {config.GRAD_CLIP_MAX_NORM}")
 
     for epoch in range(1, epochs + 1):
@@ -560,6 +617,8 @@ def train(
             aux_loss_weight=aux_weight,
             use_mixup=use_mixup,
             ema=ema,
+            supcon_weight=supcon_w,
+            supcon_temperature=supcon_t,
         )
 
         # ── 验证：原始模型，仅在 thr=0.5 计算指标，用 raw macF1 选 best ──

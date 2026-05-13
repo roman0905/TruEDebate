@@ -4,7 +4,8 @@
       "Bash(python -c \"import sys, json; d = json.load\\(sys.stdin\\); print\\('Keys:', list\\(d.keys\\(\\)\\)\\); print\\('Label:', d.get\\('label'\\)\\); print\\('Nodes:', len\\(d.get\\('nodes',[]\\)\\)\\); print\\('First node keys:', list\\(d['nodes'][0].keys\\(\\)\\) if d.get\\('nodes'\\) else None\\); print\\('Edge count:', len\\(d.get\\('edge_index',[[],[]]\\)[0]\\)\\); print\\('Selected perspectives:', [p.get\\('key'\\) for p in d.get\\('selected_perspectives',[]\\)]\\); print\\('Debate mode:', d.get\\('debate_mode'\\)\\); print\\('Edge types unique:', sorted\\(set\\(d.get\\('edge_type',[]\\)\\)\\)\\)\")",
       "Bash(python -c \"import sys, json; d = json.load\\(sys.stdin\\); [print\\(f\\\\\"node{i}: role_id={n['role_id']}, role_name={n.get\\('role_name'\\)}, perspective_key={n.get\\('perspective_key'\\)}, text_len={len\\(n.get\\('text',''\\)\\)}\\\\\"\\) for i,n in enumerate\\(d['nodes']\\)]\")",
       "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py)",
-      "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py main_ensemble.py)"
+      "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py main_ensemble.py)",
+      "Bash(python -m py_compile config.py insight_flow/networks.py)"
     ]
   }
 }

@@ -233,6 +233,32 @@ THRESHOLD_SEARCH_STEP = 0.01
 USE_BERT4 = True
 BERT4_LAYERS = 4  # 取最后 N 层平均
 
+# ═══════════════════════════════════════════════════════════
+# V7 三大方法创新模块（针对 TED 模型本身漏洞）
+# ═══════════════════════════════════════════════════════════
+
+# FNACA: Fine-Grained News-Argument Co-Attention
+# 修正 TED 漏洞 W2（pooled MHA 名存实亡）：每个 turn 与 news token 序列做
+# fine-grained cross-attention，让 turn 表示在 GAT 之前先 news-aware。
+USE_FNACA = True
+FNACA_HEADS = 4
+FNACA_DROPOUT = 0.1
+
+# SCCG: Self-Consistency Credibility Gating
+# 修正 TED 漏洞 W3（hallucination 等权聚合）：三个信号融合出每个 turn
+# 的可信度 c_i，门控 GAT 输入与池化阶段。
+USE_SCCG = True
+SCCG_GATE_GAT_INPUT = True   # 是否门控 GAT 输入特征
+SCCG_GATE_GAT_OUTPUT = True  # 是否门控 GAT 输出特征（用于 pool 阶段）
+SCCG_INIT_BIAS = 2.0  # sigmoid 输出初始接近 1（不要在训练初期就把信号砍掉）
+
+# SCRA: Stance-Contrastive Representation Auxiliary
+# 修正 TED 漏洞 W5（BERT 不知立场）：在 graph-level 表示上加 SupCon 损失，
+# 强迫同标签样本聚拢、异标签样本远离。
+USE_SCRA = True
+SCRA_WEIGHT = 0.1
+SCRA_TEMPERATURE = 0.07
+
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.01
