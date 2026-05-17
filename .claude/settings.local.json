@@ -7,7 +7,9 @@
       "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py main_ensemble.py)",
       "Bash(python -m py_compile config.py insight_flow/networks.py)",
       "Bash(python -m py_compile insight_flow/train.py)",
-      "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py main_ensemble.py main_kd_prepare.py)"
+      "Bash(python -m py_compile config.py insight_flow/dataset.py insight_flow/networks.py insight_flow/train.py main_train.py main_ensemble.py main_kd_prepare.py)",
+      "Bash(grep -n \"测试集结果\\\\|Best Epoch\\\\|Ensemble 结果\\\\|开始训练 seed\\\\|开始训练$\\\\|Macro F1\\\\|macF1@\\\\|Test macF1\\\\|Test:\" D:/Code/TruEDebate/train.log)",
+      "Bash(python -c ' *)"
     ]
   }
 }

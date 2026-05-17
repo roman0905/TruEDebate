@@ -369,3 +369,43 @@ class DebateGraphDataset(TorchDataset):
             if src_node.get("perspective_key") and dst_node.get("perspective_key"):
                 remapped[idx] = cross_id
         return remapped
+
+
+# ──────────────────────────────── 路 C：双流配对数据 ────────────────────────────────
+
+
+class PairedDebateDataset(TorchDataset):
+    """同一条新闻的 TED 二元辩论数据 + PAMD 多视角辩论数据配对。
+
+    两套数据在 output/ 目录下按 split 一一对应（en_train ↔ en_train_pamd 等），
+    文件名按 id 排序后顺序一致，因此用同一个 idx 即可对齐。
+    """
+
+    def __init__(self, ted_dir: str | Path, pamd_dir: str | Path, lang: str = "en"):
+        self.ted_dataset = DebateGraphDataset(ted_dir, lang=lang)
+        self.pamd_dataset = DebateGraphDataset(pamd_dir, lang=lang)
+        if len(self.ted_dataset) != len(self.pamd_dataset):
+            raise ValueError(
+                f"TED 与 PAMD 数据集长度不一致: "
+                f"ted={len(self.ted_dataset)}, pamd={len(self.pamd_dataset)}"
+            )
+        # 共享底层 tokenizer，二者从同一 BERT_MODELS[lang] 加载。
+        self.lang = lang
+
+    def __len__(self) -> int:
+        return len(self.ted_dataset)
+
+    def __getitem__(self, idx: int) -> dict:
+        return {
+            "ted": self.ted_dataset[idx],
+            "pamd": self.pamd_dataset[idx],
+        }
+
+
+def paired_collate(items: list[dict]) -> dict:
+    """与 PyG DataLoader.collate_fn 兼容的配对 batching。"""
+    from torch_geometric.data import Batch
+    return {
+        "ted": Batch.from_data_list([item["ted"] for item in items]),
+        "pamd": Batch.from_data_list([item["pamd"] for item in items]),
+    }
